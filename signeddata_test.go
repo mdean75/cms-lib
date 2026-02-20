@@ -13,11 +13,15 @@ import (
 	"encoding/asn1"
 	"errors"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/mdean75/cms/internal/timestamp"
+	pkiasn1 "github.com/mdean75/cms/internal/asn1"
 )
 
 // --- Test certificate helpers ---
@@ -787,6 +791,152 @@ func TestCounterSign_RSAPSSAttached(t *testing.T) {
 		}
 	}
 	assert.True(t, certFound, "counter-signer certificate must be embedded in SignedData")
+}
+
+// --- WithTimestamp ---
+
+// newMockTSA returns an httptest.Server that acts as a minimal RFC 3161 TSA.
+// It signs TSTInfo tokens using the given certificate and key.
+func newMockTSA(t *testing.T, tsaCert *x509.Certificate, tsaKey crypto.Signer) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Helper()
+		var req timestamp.TimeStampReq
+		body := make([]byte, r.ContentLength)
+		_, err := r.Body.Read(body)
+		if err != nil && err.Error() != "EOF" {
+			http.Error(w, "read body", http.StatusInternalServerError)
+			return
+		}
+		if _, err := asn1.Unmarshal(body, &req); err != nil {
+			http.Error(w, "parse TSR", http.StatusBadRequest)
+			return
+		}
+
+		// Build a TSTInfo for the request.
+		tst := timestamp.TSTInfo{
+			Version:        1,
+			Policy:         asn1.ObjectIdentifier{1, 2, 3},
+			MessageImprint: req.MessageImprint,
+			SerialNumber:   big.NewInt(42),
+			GenTime:        time.Now().UTC().Truncate(time.Second),
+		}
+		tstDER, err := asn1.Marshal(tst)
+		if err != nil {
+			http.Error(w, "marshal TSTInfo", http.StatusInternalServerError)
+			return
+		}
+
+		// Create the timestamp token as a CMS SignedData.
+		tokenDER, err := NewSigner().
+			WithCertificate(tsaCert).
+			WithPrivateKey(tsaKey).
+			WithContentType(pkiasn1.OIDTSTInfo).
+			Sign(bytes.NewReader(tstDER))
+		if err != nil {
+			http.Error(w, "sign TSTInfo", http.StatusInternalServerError)
+			return
+		}
+
+		// Wrap in TimeStampResp.
+		var tokenRaw asn1.RawValue
+		if _, err := asn1.Unmarshal(tokenDER, &tokenRaw); err != nil {
+			http.Error(w, "parse token", http.StatusInternalServerError)
+			return
+		}
+		resp := timestamp.TimeStampResp{
+			Status:         timestamp.PKIStatusInfo{Status: 0},
+			TimeStampToken: tokenRaw,
+		}
+		respDER, err := asn1.Marshal(resp)
+		if err != nil {
+			http.Error(w, "marshal response", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/timestamp-reply")
+		_, _ = w.Write(respDER)
+	}))
+}
+
+func TestSignVerify_WithTimestamp(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	tsaCert, tsaKey := generateSelfSignedRSA(t, 2048)
+
+	tsa := newMockTSA(t, tsaCert, tsaKey)
+	defer tsa.Close()
+
+	der, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		WithTimestamp(tsa.URL).
+		Sign(bytes.NewReader([]byte("timestamped content")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+func TestSigner_EmptyTSAURLError(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+
+	_, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		WithTimestamp("").
+		Sign(bytes.NewReader([]byte("x")))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
+}
+
+func TestVerify_WrongTimestampToken(t *testing.T) {
+	// Sign two separate messages so we have two different signatures.
+	cert, key := generateSelfSignedRSA(t, 2048)
+	tsaCert, tsaKey := generateSelfSignedRSA(t, 2048)
+
+	tsa := newMockTSA(t, tsaCert, tsaKey)
+	defer tsa.Close()
+
+	// Sign message A with timestamp (token covers sig-of-A).
+	derA, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		WithTimestamp(tsa.URL).
+		Sign(bytes.NewReader([]byte("message A")))
+	require.NoError(t, err)
+
+	// Sign message B with timestamp (token covers sig-of-B).
+	derB, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		WithTimestamp(tsa.URL).
+		Sign(bytes.NewReader([]byte("message B")))
+	require.NoError(t, err)
+
+	// Parse both SignedDatas and swap B's unsigned attrs into A's SignerInfo.
+	psdA, err := ParseSignedData(bytes.NewReader(derA))
+	require.NoError(t, err)
+	psdB, err := ParseSignedData(bytes.NewReader(derB))
+	require.NoError(t, err)
+
+	// Transplant B's timestamp (which covers sig-of-B) onto A's SignerInfo.
+	sd := psdA.signedData
+	sd.SignerInfos[0].UnsignedAttrs = psdB.signedData.SignerInfos[0].UnsignedAttrs
+
+	// Re-marshal and re-parse.
+	ciDER, err := marshalContentInfo(sd)
+	require.NoError(t, err)
+	parsed, err := ParseSignedData(bytes.NewReader(ciDER))
+	require.NoError(t, err)
+
+	// Verify must fail because the timestamp covers B's signature, not A's.
+	err = parsed.Verify(WithNoChainValidation())
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrTimestamp),
+		"wrong timestamp token must produce ErrTimestamp, got: %v", err)
 }
 
 func TestCounterSign_NilCertError(t *testing.T) {

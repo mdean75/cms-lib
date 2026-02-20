@@ -103,3 +103,9 @@ var (
 	// OIDMGF1 identifies the MGF1 mask generation function used in RSASSA-PSS.
 	OIDMGF1 = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 8}
 )
+
+// RFC 3161 Time-Stamp Protocol OIDs.
+var (
+	// OIDTSTInfo identifies the TSTInfo content type embedded in a timestamp token.
+	OIDTSTInfo = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 1, 4}
+)

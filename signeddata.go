@@ -16,6 +16,7 @@ import (
 
 	"github.com/mdean75/cms/ber"
 	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	"github.com/mdean75/cms/internal/timestamp"
 )
 
 // setTagByte is the ASN.1 tag byte for an explicit SET OF, used when re-encoding
@@ -46,6 +47,7 @@ type Signer struct {
 	maxSize           int64
 	additionalSigners []*Signer
 	crls              [][]byte
+	tsaURL            string
 	errs              []error
 }
 
@@ -187,6 +189,18 @@ func (s *Signer) WithAdditionalSigner(other *Signer) *Signer {
 	return s
 }
 
+// WithTimestamp requests an RFC 3161 timestamp from tsaURL after signing and
+// embeds it as an unsigned attribute (id-aa-signatureTimeStampToken) on each
+// SignerInfo. The timestamp covers the SignerInfo's Signature bytes.
+func (s *Signer) WithTimestamp(tsaURL string) *Signer {
+	if tsaURL == "" {
+		s.errs = append(s.errs, newConfigError("TSA URL is empty"))
+		return s
+	}
+	s.tsaURL = tsaURL
+	return s
+}
+
 // AddCRL embeds a DER-encoded Certificate Revocation List in the SignedData
 // revocationInfoChoices field.
 func (s *Signer) AddCRL(derCRL []byte) *Signer {
@@ -231,6 +245,38 @@ func (s *Signer) Sign(r io.Reader) ([]byte, error) {
 		allHashes = append(allHashes, h)
 		allCerts = append(allCerts, as.cert)
 		allCerts = append(allCerts, as.extraCerts...)
+	}
+
+	// If a TSA URL is configured, fetch a timestamp token for each SignerInfo
+	// and embed it as an unsigned id-aa-signatureTimeStampToken attribute.
+	if s.tsaURL != "" {
+		for i := range allSIs {
+			algID, algErr := digestAlgID(allHashes[i])
+			if algErr != nil {
+				return nil, algErr
+			}
+			// Hash the Signature bytes to form the MessageImprint.
+			h, hashErr := newHash(allHashes[i])
+			if hashErr != nil {
+				return nil, hashErr
+			}
+			h.Write(allSIs[i].Signature)
+
+			token, tsErr := timestamp.Request(s.tsaURL, algID, h.Sum(nil))
+			if tsErr != nil {
+				return nil, wrapError(CodeTimestamp, "fetching RFC 3161 timestamp", tsErr)
+			}
+
+			merged, mergeErr := mergeUnsignedAttr(
+				allSIs[i].UnsignedAttrs,
+				pkiasn1.OIDAttributeTimeStampToken,
+				token,
+			)
+			if mergeErr != nil {
+				return nil, mergeErr
+			}
+			allSIs[i].UnsignedAttrs = merged
+		}
 	}
 
 	// Build EncapsulatedContentInfo.
@@ -1004,6 +1050,39 @@ func (p *ParsedSignedData) verifySigner(si pkiasn1.SignerInfo, content []byte, c
 		}
 	}
 
+	// Step 5: Verify any embedded timestamp tokens.
+	if len(si.UnsignedAttrs.FullBytes) > 0 {
+		if err := verifyTimestampsInSI(si); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// verifyTimestampsInSI checks every id-aa-signatureTimeStampToken unsigned
+// attribute in si against si.Signature. Returns an error if any token's
+// MessageImprint does not match hash(si.Signature).
+func verifyTimestampsInSI(si pkiasn1.SignerInfo) error {
+	// Retag [1] IMPLICIT (0xA1) → SET (0x31) for attribute parsing.
+	setBytes := make([]byte, len(si.UnsignedAttrs.FullBytes))
+	copy(setBytes, si.UnsignedAttrs.FullBytes)
+	setBytes[0] = setTagByte
+
+	var attrs pkiasn1.RawAttributes
+	if _, err := asn1.UnmarshalWithParams(setBytes, &attrs, "set"); err != nil {
+		return wrapError(CodeParse, "parsing unsigned attributes for timestamp verification", err)
+	}
+
+	for _, attr := range attrs {
+		if !attr.Type.Equal(pkiasn1.OIDAttributeTimeStampToken) {
+			continue
+		}
+		// attr.Values.Bytes is the ContentInfo DER inside the SET wrapper.
+		if err := timestamp.VerifyHash(attr.Values.Bytes, si.Signature); err != nil {
+			return wrapError(CodeTimestamp, "timestamp message imprint verification failed", err)
+		}
+	}
 	return nil
 }
 

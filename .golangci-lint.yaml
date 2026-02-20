@@ -1,0 +1,312 @@
+version: "2"
+
+run:
+  # Explicit Go version so linters use the correct language semantics.
+  go: "1.24"
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - asciicheck
+    - bidichk
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - cyclop
+    - decorder
+    - dupl
+    - durationcheck
+    - embeddedstructfieldcheck
+    - err113        # Flags inline errors.New/fmt.Errorf — encourages sentinel errors.
+    - errcheck
+    - errname
+    - errorlint     # Complementary to err113: checks correct use of errors.Is/As/%w wrapping.
+    - exhaustive
+    - exptostd
+    - forcetypeassert
+    - funcorder
+    - gocheckcompilerdirectives
+    - gochecknoglobals
+    - gochecknoinits
+    - gochecksumtype  # Exhaustiveness over sealed interface hierarchies (different from exhaustive).
+    - gocognit        # Cognitive complexity — what CLAUDE.md mandates (≤ 15). Different from cyclop.
+    - goconst
+    - gocritic
+    # gocyclo omitted: cyclop measures the same cyclomatic metric plus adds package-level averaging.
+    # Running both is redundant. cyclop is the superset.
+    - godoclint
+    - gosec
+    - iface
+    - ineffassign
+    - interfacebloat
+    - lll
+    - modernize
+    - nakedret
+    - perfsprint
+    - predeclared
+    - reassign
+    - recvcheck
+    - staticcheck
+    - tagalign
+    - thelper
+    - unconvert
+    - unused
+    - usestdlibvars
+
+  settings:
+    # --- Complexity ---
+
+    cyclop:
+      # Cyclomatic complexity: counts the number of linearly independent paths through a function.
+      # Set to match the CLAUDE.md cognitive complexity limit.
+      max-complexity: 15
+      # Optionally enable package-level average reporting (0 = disabled).
+      package-average: 0.0
+
+    gocognit:
+      # Cognitive complexity: weights nested control flow more heavily than cyclomatic complexity,
+      # better reflecting readability. CLAUDE.md mandates ≤ 15 for all functions and methods.
+      # Default is 30 — without this setting the linter would miss many real violations.
+      min-complexity: 15
+
+    # --- Line length ---
+
+    lll:
+      # 120 is a widely adopted modern limit. The Go standard library itself uses ~100;
+      # 120 gives room for descriptive identifiers and long ASN.1/crypto type names.
+      line-length: 120
+      tab-width: 4
+
+    # --- Declaration ordering ---
+
+    decorder:
+      # Require type → const → var → func ordering within each file.
+      dec-order:
+        - type
+        - const
+        - var
+        - func
+      # Don't enforce that each kind appears exactly once; Go style often groups
+      # related type+const blocks together (e.g., ErrorCode type then its const block).
+      disable-dec-num-check: true
+      disable-type-dec-num-check: true
+      disable-const-dec-num-check: true
+      disable-var-dec-num-check: true
+      ignore-underscore-vars: true
+
+    # --- Duplication ---
+
+    dupl:
+      # Minimum token count to flag as a duplicate block. 150 is the default;
+      # lower values produce more noise in test files.
+      threshold: 150
+
+    # --- Struct embedding ---
+
+    embeddedstructfieldcheck:
+      # Require a blank line separating embedded fields from regular fields.
+      empty-line: true
+      # Do not embed sync.Mutex directly — forces callers to call Lock on the outer type.
+      forbid-mutex: true
+
+    # --- Error handling ---
+
+    errorlint:
+      errorf: true        # flag fmt.Errorf without %w
+      errorf-multi: true  # flag multiple %w verbs (Go 1.20+ only)
+      asserts: true       # flag type assertions directly on errors (use errors.As)
+      comparison: true    # flag == comparisons on errors (use errors.Is)
+
+    errcheck:
+      # Flag type assertions without the comma-ok form.
+      check-type-assertions: true
+      # Do not flag assignments to blank identifier; _ = f() is sometimes intentional.
+      check-blank: false
+
+    # --- Switch exhaustiveness ---
+
+    exhaustive:
+      # A default: case counts as exhaustive — avoids forcing case arms for every iota
+      # value in switches that legitimately have a catch-all.
+      default-signifies-exhaustive: true
+      check:
+        - switch
+        - map
+
+    gochecksumtype:
+      # Same stance: a default: case satisfies exhaustiveness for sum types.
+      default-signifies-exhaustive: true
+
+    # --- Function ordering ---
+
+    funcorder:
+      # Constructor functions (NewXxx) must appear before methods.
+      constructor: true
+      # Methods on the same type must appear in a consistent order across the file.
+      struct-method: true
+      # Alphabetical ordering within a group — leave off for now; too prescriptive.
+      alphabetical: false
+
+    # --- Documentation ---
+
+    godoclint:
+      # basic: require that all exported symbols have a godoc comment.
+      default: basic
+
+    # --- Security ---
+
+    gosec:
+      # Report all findings regardless of severity or confidence. This is a cryptographic
+      # library — any security issue is worth knowing about.
+      severity: low
+      confidence: low
+
+    # --- gocritic ---
+
+    gocritic:
+      # Enable diagnostic (bug-prone patterns) and performance checks by default.
+      # Style checks are useful but can be tuned later once the baseline is clean.
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+
+    # --- goconst ---
+
+    goconst:
+      # Only flag strings that appear 3+ times and are at least 3 characters long.
+      min-len: 3
+      min-occurrences: 3
+      # Do not flag strings that are already defined as a constant somewhere.
+      match-constant: true
+      ignore-calls: true
+
+    # --- Interface checks ---
+
+    iface:
+      linter-mode: all
+
+    interfacebloat:
+      # Interfaces with more than 10 methods are a design smell.
+      count: 10
+
+    # --- Naked returns ---
+
+    nakedret:
+      # Functions longer than 30 lines must not use naked returns.
+      max-func-lines: 30
+
+    # --- Package-level variable reassignment ---
+
+    reassign:
+      # Check all package-level variables for reassignment after initialization.
+      patterns:
+        - ".*"
+
+    # --- Receiver consistency ---
+
+    recvcheck:
+      # Enforce that all methods on a type use the same receiver type (pointer or value).
+      skip-underscore: false
+
+    # --- Struct tag alignment ---
+
+    tagalign:
+      align: true
+      sort: true
+      # Preferred tag key order. asn1 tags are central to this library.
+      order:
+        - asn1
+        - json
+        - yaml
+        - xml
+
+    # --- Test helpers ---
+
+    thelper:
+      test:
+        first: true   # t.Helper() must be the first statement
+        name: true    # parameter must be named t
+        begin: true   # must call t.Helper() at all
+      benchmark:
+        first: true
+        name: true
+        begin: true
+      tb:
+        first: true
+        name: true
+        begin: true
+
+    # --- Standard library variable usage ---
+
+    usestdlibvars:
+      http-method: true
+      http-status-code: true
+      time-weekday: true
+      time-month: true
+      time-layout: true
+      # Flag magic crypto.Hash integers — especially valuable in a crypto library.
+      crypto-hash: true
+
+    # --- Loop variable copying ---
+
+    copyloopvar:
+      check-alias: false
+
+    # --- Predeclared identifiers ---
+
+    predeclared:
+      # Comma-separated list of predeclared identifiers to allow shadowing (none for now).
+      ignore: ""
+
+    # --- staticcheck ---
+
+    staticcheck:
+      # Run all checks. Individual checks can be disabled with "-SAxxxx" entries.
+      checks:
+        - all
+
+  exclusions:
+    # Ignore issues in machine-generated files.
+    generated: lax
+
+    rules:
+      # Test files are white-box by convention; relax rules that don't add value there.
+      - path: "_test\\.go"
+        linters:
+          - gochecknoglobals  # benchmark sink vars (required by CLAUDE.md) are package-level
+          - err113            # test helpers may create errors inline
+          - goconst           # repeated test strings need not be constants
+          - dupl              # similar test cases are expected
+          - gosec             # crypto/rand test usage should not be flagged as weak
+
+      # OID constants must be package-level vars (Go has no const for slice types).
+      - path: "internal/asn1/oid\\.go"
+        linters:
+          - gochecknoglobals
+
+      # Sentinel error variables are a deliberate, idiomatic Go pattern encouraged by err113.
+      - path: "errors\\.go"
+        linters:
+          - gochecknoglobals
+
+      # Algorithm lookup tables (allowedHashes, hashToOID, oidToHash) are effectively
+      # immutable maps — Go cannot express them as constants.
+      - path: "algorithm\\.go"
+        linters:
+          - gochecknoglobals
+
+# Output configuration options.
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+      colors: true
+  sort-order:
+    - linter
+    - severity
+    - file
+  show-stats: true

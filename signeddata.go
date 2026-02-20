@@ -32,19 +32,21 @@ const implicitTag0Byte = byte(0xA0)
 // Signer methods are not safe for concurrent use; Sign is safe for concurrent use
 // once the builder is fully configured.
 type Signer struct {
-	cert           *x509.Certificate
-	key            crypto.Signer
-	hash           crypto.Hash
-	family         signatureFamily
-	familyExplicit bool // true when family was set via WithRSAPKCS1 option
-	detached       bool
-	sidType        SignerIdentifierType
-	contentType    asn1.ObjectIdentifier
-	extraCerts     []*x509.Certificate
-	authAttrs      []pkiasn1.Attribute
-	unauthAttrs    []pkiasn1.Attribute
-	maxSize        int64
-	errs           []error
+	cert              *x509.Certificate
+	key               crypto.Signer
+	hash              crypto.Hash
+	family            signatureFamily
+	familyExplicit    bool // true when family was set via WithRSAPKCS1 option
+	detached          bool
+	sidType           SignerIdentifierType
+	contentType       asn1.ObjectIdentifier
+	extraCerts        []*x509.Certificate
+	authAttrs         []pkiasn1.Attribute
+	unauthAttrs       []pkiasn1.Attribute
+	maxSize           int64
+	additionalSigners []*Signer
+	crls              [][]byte
+	errs              []error
 }
 
 // NewSigner returns a new Signer with default settings:
@@ -172,22 +174,35 @@ func (s *Signer) WithMaxAttachedContentSize(maxBytes int64) *Signer {
 	return s
 }
 
+// WithAdditionalSigner adds a second (or subsequent) signer to the SignedData.
+// The additional signer must be configured with at least a certificate and private
+// key. All signers share the primary signer's content, content type, and
+// detached/attached setting.
+func (s *Signer) WithAdditionalSigner(other *Signer) *Signer {
+	if other == nil {
+		s.errs = append(s.errs, newConfigError("additional signer is nil"))
+		return s
+	}
+	s.additionalSigners = append(s.additionalSigners, other)
+	return s
+}
+
+// AddCRL embeds a DER-encoded Certificate Revocation List in the SignedData
+// revocationInfoChoices field.
+func (s *Signer) AddCRL(derCRL []byte) *Signer {
+	if len(derCRL) == 0 {
+		s.errs = append(s.errs, newConfigError("CRL DER bytes are empty"))
+		return s
+	}
+	s.crls = append(s.crls, derCRL)
+	return s
+}
+
 // Sign reads content from r, constructs a CMS SignedData, and returns the
 // DER-encoded ContentInfo. All builder configuration errors are reported here.
 func (s *Signer) Sign(r io.Reader) ([]byte, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
-	}
-
-	effectiveHash := hashForKey(s.key, s.hash)
-
-	family := s.family
-	if !s.familyExplicit {
-		var err error
-		family, err = detectFamily(s.key)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	// Read and optionally limit content.
@@ -196,44 +211,26 @@ func (s *Signer) Sign(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 
-	// Compute content digest.
-	h, err := newHash(effectiveHash)
-	if err != nil {
-		return nil, err
-	}
-	h.Write(content)
-	digest := h.Sum(nil)
-
-	// Build signedAttrs.
-	signedAttrs, err := s.buildSignedAttrs(digest)
+	// Sign with the primary signer.
+	primarySI, primaryHash, err := s.signContent(content, s.contentType)
 	if err != nil {
 		return nil, err
 	}
 
-	// DER-encode signedAttrs as a SET for digest computation.
-	signedAttrsBytes, err := marshalAttributes(signedAttrs)
-	if err != nil {
-		return nil, err
-	}
+	allSIs := []pkiasn1.SignerInfo{primarySI}
+	allHashes := []crypto.Hash{primaryHash}
+	allCerts := append([]*x509.Certificate{s.cert}, s.extraCerts...)
 
-	// Compute digest over re-encoded signedAttrs (SET tag, not IMPLICIT [0]).
-	h2, err := newHash(effectiveHash)
-	if err != nil {
-		return nil, err
-	}
-	h2.Write(signedAttrsBytes)
-	signedAttrsDigest := h2.Sum(nil)
-
-	// Sign the digest.
-	sig, err := s.sign(signedAttrsDigest, effectiveHash, family)
-	if err != nil {
-		return nil, err
-	}
-
-	// Build SignerInfo.
-	signerInfo, err := s.buildSignerInfo(effectiveHash, family, signedAttrsBytes, sig)
-	if err != nil {
-		return nil, err
+	// Sign with each additional signer using the primary's content type.
+	for _, as := range s.additionalSigners {
+		si, h, siErr := as.signContent(content, s.contentType)
+		if siErr != nil {
+			return nil, siErr
+		}
+		allSIs = append(allSIs, si)
+		allHashes = append(allHashes, h)
+		allCerts = append(allCerts, as.cert)
+		allCerts = append(allCerts, as.extraCerts...)
 	}
 
 	// Build EncapsulatedContentInfo.
@@ -243,12 +240,70 @@ func (s *Signer) Sign(r io.Reader) ([]byte, error) {
 	}
 
 	// Assemble SignedData.
-	sd, err := s.buildSignedData(eci, signerInfo, effectiveHash)
+	sd, err := s.buildSignedDataMulti(eci, allSIs, allHashes, allCerts)
 	if err != nil {
 		return nil, err
 	}
 
 	return marshalContentInfo(sd)
+}
+
+// signContent computes a SignerInfo for this signer over the given content bytes.
+// contentType is passed explicitly so additional signers use the primary signer's
+// eContentType in their signed attributes.
+func (s *Signer) signContent(content []byte, contentType asn1.ObjectIdentifier) (pkiasn1.SignerInfo, crypto.Hash, error) {
+	effectiveHash := hashForKey(s.key, s.hash)
+
+	family := s.family
+	if !s.familyExplicit {
+		var err error
+		family, err = detectFamily(s.key)
+		if err != nil {
+			return pkiasn1.SignerInfo{}, 0, err
+		}
+	}
+
+	// Compute content digest.
+	h, err := newHash(effectiveHash)
+	if err != nil {
+		return pkiasn1.SignerInfo{}, 0, err
+	}
+	h.Write(content)
+	digest := h.Sum(nil)
+
+	// Build signedAttrs using the provided content type.
+	signedAttrs, err := s.buildSignedAttrsForType(digest, contentType)
+	if err != nil {
+		return pkiasn1.SignerInfo{}, 0, err
+	}
+
+	// DER-encode signedAttrs as a SET for digest computation.
+	signedAttrsBytes, err := marshalAttributes(signedAttrs)
+	if err != nil {
+		return pkiasn1.SignerInfo{}, 0, err
+	}
+
+	// Compute digest over re-encoded signedAttrs (SET tag, not IMPLICIT [0]).
+	h2, err := newHash(effectiveHash)
+	if err != nil {
+		return pkiasn1.SignerInfo{}, 0, err
+	}
+	h2.Write(signedAttrsBytes)
+	signedAttrsDigest := h2.Sum(nil)
+
+	// Sign the digest.
+	sig, err := s.sign(signedAttrsDigest, effectiveHash, family)
+	if err != nil {
+		return pkiasn1.SignerInfo{}, 0, err
+	}
+
+	// Build SignerInfo.
+	si, err := s.buildSignerInfo(effectiveHash, family, signedAttrsBytes, sig)
+	if err != nil {
+		return pkiasn1.SignerInfo{}, 0, err
+	}
+
+	return si, effectiveHash, nil
 }
 
 // validate checks that all required fields are set and no configuration errors
@@ -269,6 +324,14 @@ func (s *Signer) validate() error {
 			a.Type.Equal(pkiasn1.OIDAttributeMessageDigest) {
 			errs = append(errs, newError(CodeAttributeInvalid,
 				fmt.Sprintf("attribute %s is injected automatically; do not add it manually", a.Type)))
+		}
+	}
+
+	// Validate additional signers.
+	for i, as := range s.additionalSigners {
+		if err := as.validate(); err != nil {
+			errs = append(errs, wrapError(CodeInvalidConfiguration,
+				fmt.Sprintf("additional signer[%d]", i), err))
 		}
 	}
 
@@ -302,11 +365,12 @@ func (s *Signer) readContent(r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-// buildSignedAttrs constructs the mandatory signed attributes plus any custom
-// attributes added by the caller.
-func (s *Signer) buildSignedAttrs(digest []byte) ([]pkiasn1.Attribute, error) {
+// buildSignedAttrsForType constructs the mandatory signed attributes plus any
+// custom attributes added by the caller. contentType is passed explicitly so
+// that additional signers can use the primary signer's eContentType.
+func (s *Signer) buildSignedAttrsForType(digest []byte, contentType asn1.ObjectIdentifier) ([]pkiasn1.Attribute, error) {
 	// Mandatory: content-type
-	ctVal, err := asn1.Marshal(s.contentType)
+	ctVal, err := asn1.Marshal(contentType)
 	if err != nil {
 		return nil, wrapError(CodeParse, "marshal content-type attribute", err)
 	}
@@ -435,11 +499,19 @@ func (s *Signer) buildSignerInfo(h crypto.Hash, family signatureFamily, signedAt
 // buildSID returns the SignerIdentifier RawValue and the corresponding
 // SignerInfo version (1 for IssuerAndSerialNumber, 3 for SubjectKeyIdentifier).
 func (s *Signer) buildSID() (asn1.RawValue, int, error) {
-	switch s.sidType {
+	return buildSignerID(s.cert, s.sidType)
+}
+
+// buildSignerID builds the SignerIdentifier ASN.1 encoding and returns the
+// SignerInfo version required by RFC 5652: 1 for IssuerAndSerialNumber, 3 for
+// SubjectKeyIdentifier. Extracted as a package-level function so it can be
+// shared with CounterSigner.
+func buildSignerID(cert *x509.Certificate, sidType SignerIdentifierType) (asn1.RawValue, int, error) {
+	switch sidType {
 	case IssuerAndSerialNumber:
 		issuerSerial := pkiasn1.IssuerAndSerialNumber{
-			Issuer:       asn1.RawValue{FullBytes: s.cert.RawIssuer},
-			SerialNumber: s.cert.SerialNumber,
+			Issuer:       asn1.RawValue{FullBytes: cert.RawIssuer},
+			SerialNumber: cert.SerialNumber,
 		}
 		encoded, err := asn1.Marshal(issuerSerial)
 		if err != nil {
@@ -448,16 +520,16 @@ func (s *Signer) buildSID() (asn1.RawValue, int, error) {
 		return asn1.RawValue{FullBytes: encoded}, 1, nil
 
 	case SubjectKeyIdentifier:
-		if len(s.cert.SubjectKeyId) == 0 {
+		if len(cert.SubjectKeyId) == 0 {
 			return asn1.RawValue{}, 0, newError(CodeInvalidConfiguration,
 				"SubjectKeyIdentifier requested but certificate has no subjectKeyIdentifier extension")
 		}
 		// [0] IMPLICIT OCTET STRING
 		encoded, err := asn1.Marshal(asn1.RawValue{
-			Class:       asn1.ClassContextSpecific,
-			Tag:         0,
-			Bytes:       s.cert.SubjectKeyId,
-			IsCompound:  false,
+			Class:      asn1.ClassContextSpecific,
+			Tag:        0,
+			Bytes:      cert.SubjectKeyId,
+			IsCompound: false,
 		})
 		if err != nil {
 			return asn1.RawValue{}, 0, wrapError(CodeParse, "marshal SubjectKeyIdentifier", err)
@@ -466,7 +538,7 @@ func (s *Signer) buildSID() (asn1.RawValue, int, error) {
 
 	default:
 		return asn1.RawValue{}, 0, newError(CodeInvalidConfiguration,
-			fmt.Sprintf("unknown SignerIdentifierType %d", s.sidType))
+			fmt.Sprintf("unknown SignerIdentifierType %d", sidType))
 	}
 }
 
@@ -500,28 +572,64 @@ func (s *Signer) buildECI(content []byte) (pkiasn1.EncapsulatedContentInfo, erro
 	return eci, nil
 }
 
-// buildSignedData assembles the full SignedData structure including the
-// DigestAlgorithms SET and any certificates.
-func (s *Signer) buildSignedData(eci pkiasn1.EncapsulatedContentInfo, si pkiasn1.SignerInfo, h crypto.Hash) (pkiasn1.SignedData, error) {
-	digestAlg, err := digestAlgID(h)
+// buildSignedDataMulti assembles the full SignedData structure from multiple
+// signers' SignerInfos, deduplicating the DigestAlgorithms SET.
+func (s *Signer) buildSignedDataMulti(eci pkiasn1.EncapsulatedContentInfo, sis []pkiasn1.SignerInfo, hashes []crypto.Hash, certs []*x509.Certificate) (pkiasn1.SignedData, error) {
+	digestAlgs, err := deduplicateDigestAlgs(hashes)
 	if err != nil {
 		return pkiasn1.SignedData{}, err
 	}
 
-	sd := pkiasn1.SignedData{
-		Version:          computeSignedDataVersion(eci.EContentType, si.Version),
-		DigestAlgorithms: []pkix.AlgorithmIdentifier{digestAlg},
-		EncapContentInfo: eci,
-		SignerInfos:      []pkiasn1.SignerInfo{si},
+	// Use the highest required SignedData version across all SignerInfos.
+	version := 1
+	for _, si := range sis {
+		if v := computeSignedDataVersion(eci.EContentType, si.Version); v > version {
+			version = v
+		}
 	}
 
-	// Include the signing certificate plus any extra chain certificates.
-	allCerts := append([]*x509.Certificate{s.cert}, s.extraCerts...)
-	for _, cert := range allCerts {
-		sd.Certificates = append(sd.Certificates, asn1.RawValue{FullBytes: cert.Raw})
+	sd := pkiasn1.SignedData{
+		Version:          version,
+		DigestAlgorithms: digestAlgs,
+		EncapContentInfo: eci,
+		SignerInfos:      sis,
+	}
+
+	// Deduplicate certificates by raw DER bytes.
+	seen := make(map[string]bool)
+	for _, cert := range certs {
+		k := string(cert.Raw)
+		if !seen[k] {
+			seen[k] = true
+			sd.Certificates = append(sd.Certificates, asn1.RawValue{FullBytes: cert.Raw})
+		}
+	}
+
+	// Embed CRLs verbatim.
+	for _, crlBytes := range s.crls {
+		sd.CRLs = append(sd.CRLs, asn1.RawValue{FullBytes: crlBytes})
 	}
 
 	return sd, nil
+}
+
+// deduplicateDigestAlgs returns one AlgorithmIdentifier per distinct OID,
+// preserving the order of first appearance.
+func deduplicateDigestAlgs(hashes []crypto.Hash) ([]pkix.AlgorithmIdentifier, error) {
+	seen := make(map[string]bool)
+	var algs []pkix.AlgorithmIdentifier
+	for _, h := range hashes {
+		alg, err := digestAlgID(h)
+		if err != nil {
+			return nil, err
+		}
+		k := alg.Algorithm.String()
+		if !seen[k] {
+			seen[k] = true
+			algs = append(algs, alg)
+		}
+	}
+	return algs, nil
 }
 
 // computeSignedDataVersion computes the required SignedData version per RFC 5652 §5.1.
@@ -660,9 +768,10 @@ func WithVerifyTime(t time.Time) VerifyOption {
 
 // ParsedSignedData is the result of parsing a CMS SignedData message.
 type ParsedSignedData struct {
-	raw         []byte // DER-normalized bytes of the entire ContentInfo
-	signedData  pkiasn1.SignedData
-	certs       []*x509.Certificate
+	raw        []byte // DER-normalized bytes of the entire ContentInfo
+	signedData pkiasn1.SignedData
+	certs      []*x509.Certificate
+	crls       []*x509.RevocationList
 }
 
 // ParseSignedData parses a BER- or DER-encoded CMS ContentInfo wrapping SignedData.
@@ -709,10 +818,14 @@ func ParseSignedData(r io.Reader) (*ParsedSignedData, error) {
 		return nil, err
 	}
 
+	// Parse embedded CRLs (silently skipping unrecognised entries).
+	crls := parseCRLs(sd.CRLs)
+
 	return &ParsedSignedData{
 		raw:        derBytes,
 		signedData: sd,
 		certs:      certs,
+		crls:       crls,
 	}, nil
 }
 
@@ -730,6 +843,20 @@ func parseCertificates(rawCerts []asn1.RawValue) ([]*x509.Certificate, error) {
 		certs = append(certs, cert)
 	}
 	return certs, nil
+}
+
+// parseCRLs decodes the raw DER bytes of revocation information choices into
+// *x509.RevocationList values. Entries that fail to parse are silently skipped.
+func parseCRLs(rawCRLs []asn1.RawValue) []*x509.RevocationList {
+	var crls []*x509.RevocationList
+	for _, raw := range rawCRLs {
+		crl, err := x509.ParseRevocationList(raw.FullBytes)
+		if err != nil {
+			continue
+		}
+		crls = append(crls, crl)
+	}
+	return crls
 }
 
 // IsDetached reports whether eContent is absent from EncapsulatedContentInfo,
@@ -759,6 +886,11 @@ func (p *ParsedSignedData) Content() (io.Reader, error) {
 // Certificates returns the certificates embedded in the SignedData.
 func (p *ParsedSignedData) Certificates() []*x509.Certificate {
 	return p.certs
+}
+
+// CRLs returns the Certificate Revocation Lists embedded in the SignedData.
+func (p *ParsedSignedData) CRLs() []*x509.RevocationList {
+	return p.crls
 }
 
 // Verify verifies all SignerInfos in an attached-content SignedData.

@@ -572,3 +572,235 @@ func dummyKey(t *testing.T) crypto.Signer {
 	_, key := generateSelfSignedRSA(t, 2048)
 	return key
 }
+
+// --- WithContentType ---
+
+func TestSignVerify_WithContentType(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	customOID := asn1.ObjectIdentifier{1, 2, 3, 99, 1}
+	content := []byte("custom content type")
+
+	der, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		WithContentType(customOID).
+		Sign(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+func TestSigner_EmptyContentTypeOIDError(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+
+	_, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		WithContentType(asn1.ObjectIdentifier{}).
+		Sign(bytes.NewReader([]byte("x")))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
+}
+
+// --- AddCertificate ---
+
+func TestSignVerify_AddCertificate(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	extra, _ := generateSelfSignedRSA(t, 2048)
+
+	der, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		AddCertificate(extra).
+		Sign(bytes.NewReader([]byte("extra cert")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	// Both the signing cert and the extra cert must be embedded.
+	assert.Len(t, parsed.Certificates(), 2)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+// --- AddUnauthenticatedAttribute ---
+
+func TestSignVerify_AddUnauthenticatedAttribute(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	customOID := asn1.ObjectIdentifier{1, 2, 3, 99, 2}
+
+	der, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		AddUnauthenticatedAttribute(customOID, "unauth-value").
+		Sign(bytes.NewReader([]byte("unauth attr test")))
+	require.NoError(t, err)
+
+	// Unsigned attrs do not affect signature validity.
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+// --- Multiple signers ---
+
+func TestSignVerify_MultipleSigners(t *testing.T) {
+	cert1, key1 := generateSelfSignedRSA(t, 2048)
+	cert2, key2 := generateSelfSignedECDSA(t, elliptic.P256())
+	content := []byte("multi-signer content")
+
+	second := NewSigner().
+		WithCertificate(cert2).
+		WithPrivateKey(key2).
+		WithHash(crypto.SHA256)
+
+	der, err := NewSigner().
+		WithCertificate(cert1).
+		WithPrivateKey(key1).
+		WithAdditionalSigner(second).
+		Sign(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	// Both certificates must be embedded.
+	assert.Len(t, parsed.Certificates(), 2)
+
+	// Verification must succeed for both signers.
+	pool := x509.NewCertPool()
+	pool.AddCert(cert1)
+	pool.AddCert(cert2)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+func TestSigner_NilAdditionalSignerError(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+
+	_, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		WithAdditionalSigner(nil).
+		Sign(bytes.NewReader([]byte("x")))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
+}
+
+// --- CRL embedding ---
+
+func TestSignVerify_CRLEmbedding(t *testing.T) {
+	// Need a CA cert with KeyUsageCRLSign to issue the CRL.
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	require.NoError(t, err)
+	caTmpl := &x509.Certificate{
+		SerialNumber:          serial,
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          []byte{9, 8, 7, 6, 5},
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, caKey.Public(), caKey)
+	require.NoError(t, err)
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+
+	cert, key := generateSelfSignedRSA(t, 2048)
+
+	// Generate a minimal CRL signed by the CA.
+	crlTemplate := &x509.RevocationList{
+		Number: big.NewInt(1),
+	}
+	crlBytes, err := x509.CreateRevocationList(rand.Reader, crlTemplate, caCert, caKey)
+	require.NoError(t, err)
+	_ = caCert
+
+	der, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		AddCRL(crlBytes).
+		Sign(bytes.NewReader([]byte("crl test")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	crls := parsed.CRLs()
+	assert.Len(t, crls, 1)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+// --- CounterSign ---
+
+func TestCounterSign_RSAPSSAttached(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	content := []byte("counter-sign test")
+
+	// Produce the original SignedData.
+	der, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		Sign(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	// Counter-sign with a second key.
+	csCert, csKey := generateSelfSignedRSA(t, 2048)
+	counterDER, err := NewCounterSigner().
+		WithCertificate(csCert).
+		WithPrivateKey(csKey).
+		CounterSign(bytes.NewReader(der))
+	require.NoError(t, err)
+	require.NotEmpty(t, counterDER)
+
+	// The result must still parse and verify as a normal SignedData.
+	parsed, err := ParseSignedData(bytes.NewReader(counterDER))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+
+	// The counter-signer's cert must be embedded.
+	certFound := false
+	for _, c := range parsed.Certificates() {
+		if bytes.Equal(c.Raw, csCert.Raw) {
+			certFound = true
+			break
+		}
+	}
+	assert.True(t, certFound, "counter-signer certificate must be embedded in SignedData")
+}
+
+func TestCounterSign_NilCertError(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	der, err := NewSigner().
+		WithCertificate(cert).
+		WithPrivateKey(key).
+		Sign(bytes.NewReader([]byte("x")))
+	require.NoError(t, err)
+
+	_, err = NewCounterSigner().
+		WithCertificate(nil).
+		WithPrivateKey(dummyKey(t)).
+		CounterSign(bytes.NewReader(der))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
+}

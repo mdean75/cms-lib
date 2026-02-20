@@ -70,6 +70,12 @@ var (
 
 // Signature algorithm OIDs for RSA, ECDSA, and EdDSA.
 var (
+	// OIDSignatureAlgorithmRSA identifies the base RSA algorithm (rsaEncryption).
+	// Some CMS implementations (including OpenSSL) use this OID as the
+	// signatureAlgorithm in SignerInfo rather than the sha*WithRSAEncryption
+	// OIDs, relying on the separate DigestAlgorithm field for the hash.
+	OIDSignatureAlgorithmRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+
 	// OIDSignatureAlgorithmSHA256WithRSA identifies RSA PKCS1v15 with SHA-256.
 	OIDSignatureAlgorithmSHA256WithRSA = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 11}
 

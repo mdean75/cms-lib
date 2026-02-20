@@ -114,7 +114,7 @@ func normalize(input []byte, offset int, w *bytes.Buffer) (int, error) {
 	}
 
 	tagStart := offset
-	tagByte, length, headerLen, indefinite, err := readHeader(input, offset)
+	tagByte, length, headerLen, numTagBytes, indefinite, err := readHeader(input, offset)
 	if err != nil {
 		return 0, err
 	}
@@ -124,11 +124,16 @@ func normalize(input []byte, offset int, w *bytes.Buffer) (int, error) {
 	tagClass := tagByte & tagClassMask
 	tagNum := tagByte & tagNumMask
 
+	// tagBytes holds all bytes of the tag field. For short-form tags this is
+	// one byte; for long-form tags (tag number ≥ 31) it is two or more bytes.
+	// We must emit all tag bytes verbatim to preserve long-form tag numbers.
+	tagBytes := input[tagStart : tagStart+numTagBytes]
+
 	// For indefinite-length or constructed primitive types, we must process
 	// the content recursively. For definite-length primitive types we may
 	// be able to copy or normalize the value bytes directly.
 	if indefinite {
-		return normalizeIndefinite(input, offset, tagStart, tagByte, tagClass, tagNum, isConstructed, w)
+		return normalizeIndefinite(input, offset, tagStart, tagByte, tagClass, tagNum, isConstructed, numTagBytes, w)
 	}
 
 	if offset+length > len(input) {
@@ -139,13 +144,16 @@ func normalize(input []byte, offset int, w *bytes.Buffer) (int, error) {
 	consumed := headerLen + length
 
 	// Constructed primitive types (e.g., constructed OCTET STRING) must be
-	// converted to primitive form per DER rules.
+	// converted to primitive form per DER rules. Clear the constructed bit in
+	// the first tag byte while preserving any remaining long-form tag bytes.
 	if isConstructed && isPrimitiveTag(tagClass, tagNum) {
 		flat, err := flattenConstructed(content, tagNum)
 		if err != nil {
 			return 0, err
 		}
-		writeTag(w, tagByte&^tagConstructedBit, len(flat))
+		primTag := append([]byte(nil), tagBytes...)
+		primTag[0] &^= tagConstructedBit
+		writeTLV(w, primTag, len(flat))
 		w.Write(flat)
 		return consumed, nil
 	}
@@ -161,7 +169,7 @@ func normalize(input []byte, offset int, w *bytes.Buffer) (int, error) {
 			}
 			pos += n
 		}
-		writeTag(w, tagByte, inner.Len())
+		writeTLV(w, tagBytes, inner.Len())
 		w.Write(inner.Bytes())
 		return consumed, nil
 	}
@@ -171,7 +179,7 @@ func normalize(input []byte, offset int, w *bytes.Buffer) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	writeTag(w, tagByte, len(normalized))
+	writeTLV(w, tagBytes, len(normalized))
 	w.Write(normalized)
 	return consumed, nil
 }
@@ -179,7 +187,11 @@ func normalize(input []byte, offset int, w *bytes.Buffer) (int, error) {
 // normalizeIndefinite handles elements encoded with BER indefinite length.
 // It reads content elements until the end-of-contents marker (eocByte eocByte),
 // normalizes each, and writes a definite-length DER encoding.
-func normalizeIndefinite(input []byte, offset, tagStart int, tagByte, tagClass, tagNum byte, isConstructed bool, w *bytes.Buffer) (int, error) {
+// numTagBytes is the number of bytes the tag field occupies in input starting
+// at tagStart; it is used to slice the full tag bytes for re-emission.
+func normalizeIndefinite(input []byte, offset, tagStart int, tagByte, tagClass, tagNum byte, isConstructed bool, numTagBytes int, w *bytes.Buffer) (int, error) {
+	tagBytes := input[tagStart : tagStart+numTagBytes]
+
 	var inner bytes.Buffer
 	pos := offset
 
@@ -207,41 +219,63 @@ func normalizeIndefinite(input []byte, offset, tagStart int, tagByte, tagClass, 
 		if err != nil {
 			return 0, err
 		}
-		writeTag(w, tagByte&^tagConstructedBit, len(flat))
+		primTag := append([]byte(nil), tagBytes...)
+		primTag[0] &^= tagConstructedBit
+		writeTLV(w, primTag, len(flat))
 		w.Write(flat)
 		return consumed, nil
 	}
 
-	// Write the normalized content with a definite-length header.
+	// For non-constructed (primitive) types with indefinite-length encoding,
+	// apply the same content normalization as for definite-length primitives.
+	// This rejects malformed content (e.g., a BOOLEAN with zero content bytes)
+	// rather than silently emitting DER that fails a subsequent normalization.
 	// For a zero-length indefinite element, inner.Len() == 0. We still write
 	// the element with a definite zero length — do NOT omit it. This preserves
 	// the distinction between an absent optional field (detached CMS signature)
 	// and a present zero-length field (signed 0-byte payload).
-	writeTag(w, tagByte, inner.Len())
+	if !isConstructed {
+		normalized, err := normalizePrimitive(tagClass, tagNum, inner.Bytes())
+		if err != nil {
+			return 0, err
+		}
+		writeTLV(w, tagBytes, len(normalized))
+		w.Write(normalized)
+		return consumed, nil
+	}
+
+	writeTLV(w, tagBytes, inner.Len())
 	w.Write(inner.Bytes())
 	return consumed, nil
 }
 
 // readHeader parses the tag and length bytes of a BER TLV element starting at
-// input[offset]. It returns the tag byte, content length, total header length,
-// whether the length is indefinite, and any error.
-func readHeader(input []byte, offset int) (tagByte byte, length, headerLen int, indefinite bool, err error) {
+// input[offset]. It returns the first tag byte, content length, total header
+// length in bytes, the number of bytes consumed by the tag field alone
+// (numTagBytes), whether the length is indefinite, and any error.
+//
+// numTagBytes is 1 for short-form tags (tag number < 31) and ≥ 2 for long-form
+// tags (tag number ≥ 31). Callers that need to re-emit the tag verbatim should
+// use input[offset : offset+numTagBytes] rather than the single tagByte value.
+func readHeader(input []byte, offset int) (tagByte byte, length, headerLen, numTagBytes int, indefinite bool, err error) {
 	if offset >= len(input) {
-		return 0, 0, 0, false, fmt.Errorf("ber: offset %d out of bounds (len %d)", offset, len(input))
+		return 0, 0, 0, 0, false, fmt.Errorf("ber: offset %d out of bounds (len %d)", offset, len(input))
 	}
 
 	tagByte = input[offset]
 	headerLen = 1
+	numTagBytes = 1
 
 	// Long-form tag numbers span multiple bytes; each byte has tagMoreBytesBit
 	// set except the last.
 	if tagByte&tagNumMask == tagLongFormMarker {
 		for {
 			if offset+headerLen >= len(input) {
-				return 0, 0, 0, false, errors.New("ber: truncated long-form tag")
+				return 0, 0, 0, 0, false, errors.New("ber: truncated long-form tag")
 			}
 			b := input[offset+headerLen]
 			headerLen++
+			numTagBytes++
 			if b&tagMoreBytesBit == 0 {
 				break
 			}
@@ -249,7 +283,7 @@ func readHeader(input []byte, offset int) (tagByte byte, length, headerLen int, 
 	}
 
 	if offset+headerLen >= len(input) {
-		return 0, 0, 0, false, errors.New("ber: truncated length field")
+		return 0, 0, 0, 0, false, errors.New("ber: truncated length field")
 	}
 
 	lenByte := input[offset+headerLen]
@@ -266,10 +300,10 @@ func readHeader(input []byte, offset int) (tagByte byte, length, headerLen int, 
 		// Long-form definite length: subsequent bytes encode the length value.
 		numBytes := int(lenByte & lenLongFormMask)
 		if numBytes == 0 || numBytes > 4 {
-			return 0, 0, 0, false, fmt.Errorf("ber: unsupported length field: %d bytes", numBytes)
+			return 0, 0, 0, 0, false, fmt.Errorf("ber: unsupported length field: %d bytes", numBytes)
 		}
 		if offset+headerLen+numBytes > len(input) {
-			return 0, 0, 0, false, errors.New("ber: truncated long-form length")
+			return 0, 0, 0, 0, false, errors.New("ber: truncated long-form length")
 		}
 		var buf [4]byte
 		copy(buf[4-numBytes:], input[offset+headerLen:offset+headerLen+numBytes])
@@ -277,13 +311,15 @@ func readHeader(input []byte, offset int) (tagByte byte, length, headerLen int, 
 		headerLen += numBytes
 	}
 
-	return tagByte, length, headerLen, indefinite, nil
+	return tagByte, length, headerLen, numTagBytes, indefinite, nil
 }
 
-// writeTag writes the DER tag byte and a minimal definite-length encoding for
-// the given content length to w.
-func writeTag(w *bytes.Buffer, tagByte byte, length int) {
-	w.WriteByte(tagByte)
+// writeTLV writes all tag bytes followed by the minimal definite-length DER
+// encoding for the given content length. tagBytes must be the complete tag
+// field as it appears in the input (one byte for short-form tags, two or more
+// bytes for long-form tags with tag number ≥ 31).
+func writeTLV(w *bytes.Buffer, tagBytes []byte, length int) {
+	w.Write(tagBytes)
 	switch {
 	case length <= lenShortFormMax:
 		w.WriteByte(byte(length))
@@ -338,7 +374,7 @@ func flattenConstructed(content []byte, tagNum byte) ([]byte, error) {
 	var flat bytes.Buffer
 	pos := 0
 	for pos < len(content) {
-		_, length, headerLen, indefinite, err := readHeader(content, pos)
+		_, length, headerLen, _, indefinite, err := readHeader(content, pos)
 		if err != nil {
 			return nil, fmt.Errorf("ber: flatten: %w", err)
 		}
@@ -365,7 +401,7 @@ func flattenBitString(content []byte) ([]byte, error) {
 	var lastUnused byte
 	pos := 0
 	for pos < len(content) {
-		_, length, headerLen, indefinite, err := readHeader(content, pos)
+		_, length, headerLen, _, indefinite, err := readHeader(content, pos)
 		if err != nil {
 			return nil, fmt.Errorf("ber: flatten BIT STRING: %w", err)
 		}

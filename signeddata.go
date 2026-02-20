@@ -1241,9 +1241,14 @@ func verifySignature(cert *x509.Certificate, si pkiasn1.SignerInfo, digest []byt
 	return nil
 }
 
-// isRSAPKCS1OID returns true if oid is one of the SHA*WithRSAEncryption OIDs.
+// isRSAPKCS1OID returns true if oid identifies an RSA PKCS1v15 signature.
+// This includes both the combined sha*WithRSAEncryption OIDs and the bare
+// rsaEncryption OID (1.2.840.113549.1.1.1), which some implementations
+// (including OpenSSL) emit in CMS SignerInfo.signatureAlgorithm, relying on
+// the DigestAlgorithm field for the hash.
 func isRSAPKCS1OID(oid asn1.ObjectIdentifier) bool {
-	return oid.Equal(pkiasn1.OIDSignatureAlgorithmSHA256WithRSA) ||
+	return oid.Equal(pkiasn1.OIDSignatureAlgorithmRSA) ||
+		oid.Equal(pkiasn1.OIDSignatureAlgorithmSHA256WithRSA) ||
 		oid.Equal(pkiasn1.OIDSignatureAlgorithmSHA384WithRSA) ||
 		oid.Equal(pkiasn1.OIDSignatureAlgorithmSHA512WithRSA)
 }

@@ -115,3 +115,63 @@ var (
 	// OIDTSTInfo identifies the TSTInfo content type embedded in a timestamp token.
 	OIDTSTInfo = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 16, 1, 4}
 )
+
+// Key transport OIDs for EnvelopedData (RFC 3447 / RFC 4055).
+var (
+	// OIDKeyTransportRSAOAEP identifies the RSAES-OAEP key encryption algorithm.
+	OIDKeyTransportRSAOAEP = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 7}
+)
+
+// Content encryption OIDs for EnvelopedData (RFC 3565 / NIST).
+var (
+	// OIDContentEncryptionAES128CBC identifies AES-128 in CBC mode.
+	OIDContentEncryptionAES128CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
+
+	// OIDContentEncryptionAES256CBC identifies AES-256 in CBC mode.
+	OIDContentEncryptionAES256CBC = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
+
+	// OIDContentEncryptionAES128GCM identifies AES-128 in GCM mode.
+	OIDContentEncryptionAES128GCM = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 6}
+
+	// OIDContentEncryptionAES256GCM identifies AES-256 in GCM mode.
+	OIDContentEncryptionAES256GCM = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 46}
+)
+
+// Key wrap OIDs for EnvelopedData (RFC 3565).
+var (
+	// OIDKeyWrapAES128 identifies the AES-128 key wrap algorithm.
+	OIDKeyWrapAES128 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 5}
+
+	// OIDKeyWrapAES256 identifies the AES-256 key wrap algorithm.
+	OIDKeyWrapAES256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 45}
+)
+
+// ECDH key agreement OIDs for EnvelopedData (RFC 5753).
+var (
+	// OIDKeyAgreeECDHSHA256 identifies the dhSinglePass-stdDH-sha256kdf-scheme.
+	OIDKeyAgreeECDHSHA256 = asn1.ObjectIdentifier{1, 3, 132, 1, 11, 1}
+
+	// OIDKeyAgreeECDHSHA384 identifies the dhSinglePass-stdDH-sha384kdf-scheme.
+	OIDKeyAgreeECDHSHA384 = asn1.ObjectIdentifier{1, 3, 132, 1, 11, 2}
+
+	// OIDKeyAgreeECDHSHA512 identifies the dhSinglePass-stdDH-sha512kdf-scheme.
+	OIDKeyAgreeECDHSHA512 = asn1.ObjectIdentifier{1, 3, 132, 1, 11, 3}
+)
+
+// EC public key OID (RFC 5480).
+var (
+	// OIDECPublicKey identifies the EC public key algorithm.
+	OIDECPublicKey = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
+)
+
+// EC named curve OIDs (RFC 5480).
+var (
+	// OIDNamedCurveP256 identifies the P-256 elliptic curve.
+	OIDNamedCurveP256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 3, 1, 7}
+
+	// OIDNamedCurveP384 identifies the P-384 elliptic curve.
+	OIDNamedCurveP384 = asn1.ObjectIdentifier{1, 3, 132, 0, 34}
+
+	// OIDNamedCurveP521 identifies the P-521 elliptic curve.
+	OIDNamedCurveP521 = asn1.ObjectIdentifier{1, 3, 132, 0, 35}
+)

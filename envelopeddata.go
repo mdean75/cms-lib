@@ -41,8 +41,6 @@ const (
 // gcmNonceSize is the standard 12-byte nonce for AES-GCM per RFC 5084.
 const gcmNonceSize = 12
 
-// gcmTagSize is the standard 16-byte authentication tag for AES-GCM.
-const gcmTagSize = 16
 
 // Encryptor builds a CMS EnvelopedData message using a fluent builder API.
 // Builder methods accumulate configuration and errors; Encrypt reports all
@@ -241,14 +239,14 @@ func (p *ParsedEnvelopedData) decryptCEK(key crypto.PrivateKey, cert *x509.Certi
 		}
 		tag := ri.FullBytes[0]
 
-		switch {
-		case tag == 0x30:
+		switch tag {
+		case 0x30:
 			cek, err := tryDecryptKTRI(ri, key, cert)
 			if err != nil || cek != nil {
 				return cek, err
 			}
 
-		case tag == 0xA1:
+		case 0xA1:
 			cek, err := tryDecryptKARI(ri, key, cert)
 			if err != nil || cek != nil {
 				return cek, err
@@ -938,13 +936,13 @@ func x963KDF(z []byte, keydatalen int, algID pkix.AlgorithmIdentifier) ([]byte, 
 		binary.BigEndian.PutUint32(counterBytes, counter)
 
 		h.Reset()
-		h.Write(z)
-		h.Write(counterBytes)
-		h.Write(algorithmIDBytes)
+		_, _ = h.Write(z)
+		_, _ = h.Write(counterBytes)
+		_, _ = h.Write(algorithmIDBytes)
 		// PartyUInfo and PartyVInfo: each is a 4-byte zero length + empty value
-		h.Write([]byte{0, 0, 0, 0}) // PartyUInfo length = 0
-		h.Write([]byte{0, 0, 0, 0}) // PartyVInfo length = 0
-		h.Write(suppPubInfo)
+		_, _ = h.Write([]byte{0, 0, 0, 0}) // PartyUInfo length = 0
+		_, _ = h.Write([]byte{0, 0, 0, 0}) // PartyVInfo length = 0
+		_, _ = h.Write(suppPubInfo)
 		result = append(result, h.Sum(nil)...)
 		_ = hLen
 	}

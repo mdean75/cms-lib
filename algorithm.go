@@ -4,13 +4,11 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"errors"
 	"fmt"
 	"hash"
 
@@ -231,47 +229,6 @@ func detectFamily(key crypto.Signer) (signatureFamily, error) {
 	}
 }
 
-// ecCurveForKey returns the elliptic curve for an ECDSA key, used to validate
-// that the requested hash is appropriate for the key size.
-func ecCurveForKey(key crypto.Signer) (elliptic.Curve, error) {
-	pub, ok := key.Public().(*ecdsa.PublicKey)
-	if !ok {
-		return nil, errors.New("key is not an ECDSA key")
-	}
-	return pub.Curve, nil
-}
-
-// validateHashForKey checks that the given hash is compatible with the key type.
-// For ECDSA it enforces curve-appropriate hash sizes (P-256→SHA-256, etc.).
-// For Ed25519 any hash is accepted (it will be overridden to SHA-512 at signing time).
-func validateHashForKey(key crypto.Signer, h crypto.Hash) error {
-	if !allowedHashes[h] {
-		return newError(CodeUnsupportedAlgorithm,
-			fmt.Sprintf("digest algorithm %v is not supported", h))
-	}
-	pub, ok := key.Public().(*ecdsa.PublicKey)
-	if !ok {
-		return nil
-	}
-	switch pub.Curve {
-	case elliptic.P256():
-		if h != crypto.SHA256 {
-			return newError(CodeUnsupportedAlgorithm,
-				fmt.Sprintf("P-256 key requires SHA-256, got %v", h))
-		}
-	case elliptic.P384():
-		if h != crypto.SHA384 {
-			return newError(CodeUnsupportedAlgorithm,
-				fmt.Sprintf("P-384 key requires SHA-384, got %v", h))
-		}
-	case elliptic.P521():
-		if h != crypto.SHA512 {
-			return newError(CodeUnsupportedAlgorithm,
-				fmt.Sprintf("P-521 key requires SHA-512, got %v", h))
-		}
-	}
-	return nil
-}
 
 // hashFromOID returns the crypto.Hash for the given digest algorithm OID.
 // Returns an error if the OID is not in the allow-list.

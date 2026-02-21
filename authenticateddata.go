@@ -339,13 +339,13 @@ func (p *ParsedAuthenticatedData) decryptMACKey(key crypto.PrivateKey, cert *x50
 			continue
 		}
 		tag := ri.FullBytes[0]
-		switch {
-		case tag == 0x30:
+		switch tag {
+		case 0x30:
 			mk, err := tryDecryptKTRI(ri, key, cert)
 			if err != nil || mk != nil {
 				return mk, err
 			}
-		case tag == 0xA1:
+		case 0xA1:
 			mk, err := tryDecryptKARI(ri, key, cert)
 			if err != nil || mk != nil {
 				return mk, err

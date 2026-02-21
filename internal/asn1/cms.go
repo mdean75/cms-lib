@@ -161,3 +161,17 @@ type RecipientEncryptedKey struct {
 	// EncryptedKey is the CEK wrapped with the key-agreement key.
 	EncryptedKey []byte
 }
+
+// DigestedData represents the CMS DigestedData content type as defined in
+// RFC 5652, section 7.1. It provides content integrity via a message digest
+// with no cryptographic signature or recipients.
+type DigestedData struct {
+	// Version is 0 when EContentType is id-data; 2 for all other content types.
+	Version int
+	// DigestAlgorithm identifies the hash algorithm used to compute Digest.
+	DigestAlgorithm pkix.AlgorithmIdentifier
+	// EncapContentInfo holds the content being digested.
+	EncapContentInfo EncapsulatedContentInfo
+	// Digest is the computed hash of the encapsulated content OCTET STRING value.
+	Digest []byte
+}

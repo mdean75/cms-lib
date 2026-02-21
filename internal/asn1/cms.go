@@ -162,6 +162,17 @@ type RecipientEncryptedKey struct {
 	EncryptedKey []byte
 }
 
+// EncryptedData represents the CMS EncryptedData content type as defined in
+// RFC 5652, section 8.1. It provides symmetric encryption with no recipient
+// key management — the content encryption key is provided directly by the caller.
+// Version is always 0. UnprotectedAttrs is not used in this implementation.
+type EncryptedData struct {
+	// Version is always 0.
+	Version int
+	// EncryptedContentInfo holds the encrypted content and algorithm parameters.
+	EncryptedContentInfo EncryptedContentInfo
+}
+
 // DigestedData represents the CMS DigestedData content type as defined in
 // RFC 5652, section 7.1. It provides content integrity via a message digest
 // with no cryptographic signature or recipients.

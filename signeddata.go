@@ -812,6 +812,33 @@ func WithVerifyTime(t time.Time) VerifyOption {
 	}
 }
 
+// SignerInfo describes a single signer extracted from a parsed CMS SignedData.
+// It exposes the resolved certificate and algorithm identifiers without leaking
+// raw ASN.1 types from the internal package.
+type SignerInfo struct {
+	// Version is the SignerInfo syntax version: 1 for IssuerAndSerialNumber,
+	// 3 for SubjectKeyIdentifier.
+	Version int
+
+	// Certificate is the signing certificate matched from the certificates
+	// embedded in SignedData. Nil if the certificate is not embedded in the
+	// message, which is valid; callers may hold it out of band.
+	Certificate *x509.Certificate
+
+	// DigestAlgorithm is the AlgorithmIdentifier for the message digest used
+	// by this signer.
+	DigestAlgorithm pkix.AlgorithmIdentifier
+
+	// SignatureAlgorithm is the AlgorithmIdentifier for the signature algorithm,
+	// including any algorithm-specific parameters (e.g., RSASSA-PSS-params for
+	// RSA-PSS).
+	SignatureAlgorithm pkix.AlgorithmIdentifier
+
+	// Signature is the raw signature bytes. For ECDSA this is a DER-encoded
+	// Ecdsa-Sig-Value; for RSA it is the raw modular exponentiation result.
+	Signature []byte
+}
+
 // ParsedSignedData is the result of parsing a CMS SignedData message.
 type ParsedSignedData struct {
 	raw        []byte // DER-normalized bytes of the entire ContentInfo
@@ -937,6 +964,37 @@ func (p *ParsedSignedData) Certificates() []*x509.Certificate {
 // CRLs returns the Certificate Revocation Lists embedded in the SignedData.
 func (p *ParsedSignedData) CRLs() []*x509.RevocationList {
 	return p.crls
+}
+
+// Signers returns a summary of each SignerInfo in the parsed SignedData.
+// Certificates are matched from the embedded certificates field. If no
+// matching certificate is embedded, SignerInfo.Certificate is nil — this
+// is valid; callers may hold the certificate out of band and pass it to
+// Verify or VerifyDetached via WithTrustRoots.
+func (p *ParsedSignedData) Signers() []SignerInfo {
+	result := make([]SignerInfo, len(p.signedData.SignerInfos))
+	for i, si := range p.signedData.SignerInfos {
+		result[i] = SignerInfo{
+			Version:            si.Version,
+			Certificate:        p.findSignerCertOrNil(si),
+			DigestAlgorithm:    si.DigestAlgorithm,
+			SignatureAlgorithm: si.SignatureAlgorithm,
+			Signature:          si.Signature,
+		}
+	}
+	return result
+}
+
+// findSignerCertOrNil attempts to locate the signing certificate for si from
+// the embedded certificates. Returns nil without error when the certificate is
+// absent or the SID cannot be parsed — callers holding the cert out of band
+// should call findSignerCert (which returns errors) during verification.
+func (p *ParsedSignedData) findSignerCertOrNil(si pkiasn1.SignerInfo) *x509.Certificate {
+	cert, err := p.findSignerCert(si)
+	if err != nil {
+		return nil
+	}
+	return cert
 }
 
 // Verify verifies all SignerInfos in an attached-content SignedData.

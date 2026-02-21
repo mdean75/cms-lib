@@ -164,6 +164,18 @@ var (
 	OIDECPublicKey = asn1.ObjectIdentifier{1, 2, 840, 10045, 2, 1}
 )
 
+// HMAC algorithm OIDs for AuthenticatedData (RFC 3370 §3.1).
+var (
+	// OIDMACAlgorithmHMACSHA256 identifies HMAC with SHA-256.
+	OIDMACAlgorithmHMACSHA256 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
+
+	// OIDMACAlgorithmHMACSHA384 identifies HMAC with SHA-384.
+	OIDMACAlgorithmHMACSHA384 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 10}
+
+	// OIDMACAlgorithmHMACSHA512 identifies HMAC with SHA-512.
+	OIDMACAlgorithmHMACSHA512 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 11}
+)
+
 // EC named curve OIDs (RFC 5480).
 var (
 	// OIDNamedCurveP256 identifies the P-256 elliptic curve.

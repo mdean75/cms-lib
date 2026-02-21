@@ -173,6 +173,31 @@ type EncryptedData struct {
 	EncryptedContentInfo EncryptedContentInfo
 }
 
+// AuthenticatedData represents the CMS AuthenticatedData content type as defined
+// in RFC 5652, section 9.1. It provides MAC-based message authentication for one
+// or more recipients. OriginatorInfo and UnauthAttrs are not used in this
+// implementation. AuthAttrs (content-type and message-digest) are always present.
+type AuthenticatedData struct {
+	// Version is 0 when all RecipientInfos are KeyTransRecipientInfo v0 and the
+	// content type is id-data; 1 for KTRI v0 with non-id-data; 2 when any KARI
+	// is present.
+	Version int
+	// RecipientInfos is the SET of per-recipient MAC key delivery information.
+	RecipientInfos []asn1.RawValue `asn1:"set"`
+	// MACAlgorithm identifies the HMAC algorithm (HMAC-SHA256/384/512).
+	MACAlgorithm pkix.AlgorithmIdentifier
+	// DigestAlgorithm identifies the hash used to compute the message-digest
+	// authAttr. MUST be present when AuthAttrs are present (RFC 5652 §9.2).
+	DigestAlgorithm pkix.AlgorithmIdentifier `asn1:"optional,explicit,tag:1"`
+	// EncapContentInfo holds the plaintext content being authenticated.
+	EncapContentInfo EncapsulatedContentInfo
+	// AuthAttrs is [2] IMPLICIT SET of authenticated attributes. content-type
+	// and message-digest MUST be present.
+	AuthAttrs asn1.RawValue `asn1:"optional,tag:2"`
+	// MAC is the computed HMAC value over the DER-encoded AuthAttrs (SET form).
+	MAC []byte
+}
+
 // DigestedData represents the CMS DigestedData content type as defined in
 // RFC 5652, section 7.1. It provides content integrity via a message digest
 // with no cryptographic signature or recipients.

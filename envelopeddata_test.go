@@ -261,10 +261,9 @@ func TestEncryptDecrypt_Defaults(t *testing.T) {
 func TestParseEnvelopedData_WrongContentType(t *testing.T) {
 	// Use a SignedData DER as wrong-type input.
 	cert, key := generateSelfSignedRSA(t, 2048)
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte("signed not enveloped")))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("signed not enveloped")))
 	require.NoError(t, err)
 
 	_, err = ParseEnvelopedData(bytes.NewReader(der))

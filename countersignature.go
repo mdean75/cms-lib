@@ -15,8 +15,8 @@ import (
 // CounterSigner appends a counter-signature to every SignerInfo in an existing
 // CMS SignedData. A counter-signature signs the Signature bytes of the target
 // SignerInfo (not the original content), as defined in RFC 5652, section 11.4.
-// Builder methods accumulate configuration and errors; CounterSign reports all
-// configuration errors at once.
+// Construct it with NewCounterSigner; CounterSign is safe for concurrent use
+// once constructed.
 type CounterSigner struct {
 	cert           *x509.Certificate
 	key            crypto.Signer
@@ -25,78 +25,44 @@ type CounterSigner struct {
 	familyExplicit bool
 	sidType        SignerIdentifierType
 	extraCerts     []*x509.Certificate
-	errs           []error
 }
 
-// NewCounterSigner returns a new CounterSigner with default settings:
-//   - SHA-256 digest
-//   - IssuerAndSerialNumber signer identifier
-func NewCounterSigner() *CounterSigner {
-	return &CounterSigner{
+// NewCounterSigner constructs a CounterSigner with the given certificate and
+// private key. Defaults: SHA-256 digest, IssuerAndSerialNumber signer identifier.
+// All configuration errors (nil cert, nil key, invalid options) are reported
+// together. CounterSign is safe for concurrent use once NewCounterSigner returns
+// successfully.
+func NewCounterSigner(cert *x509.Certificate, key crypto.Signer, opts ...SigningOption) (*CounterSigner, error) {
+	var errs []error
+	if cert == nil {
+		errs = append(errs, newConfigError("certificate is nil"))
+	}
+	if key == nil {
+		errs = append(errs, newConfigError("private key is nil"))
+	}
+
+	cs := &CounterSigner{
+		cert: cert,
+		key:  key,
 		hash: crypto.SHA256,
 	}
-}
 
-// WithCertificate sets the counter-signing certificate. Required.
-func (cs *CounterSigner) WithCertificate(cert *x509.Certificate) *CounterSigner {
-	if cert == nil {
-		cs.errs = append(cs.errs, newConfigError("certificate is nil"))
-		return cs
+	for _, opt := range opts {
+		if err := opt.applyToCounterSigner(cs); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	cs.cert = cert
-	return cs
-}
 
-// WithPrivateKey sets the private key used for counter-signing. Required.
-func (cs *CounterSigner) WithPrivateKey(key crypto.Signer) *CounterSigner {
-	if key == nil {
-		cs.errs = append(cs.errs, newConfigError("private key is nil"))
-		return cs
+	if err := joinErrors(errs); err != nil {
+		return nil, err
 	}
-	cs.key = key
-	return cs
-}
-
-// WithHash sets the digest algorithm. For Ed25519, this is ignored; SHA-512
-// is always used per RFC 8419. Defaults to SHA-256.
-func (cs *CounterSigner) WithHash(h crypto.Hash) *CounterSigner {
-	cs.hash = h
-	return cs
-}
-
-// WithRSAPKCS1 selects RSA PKCS1v15 as the signature algorithm. By default
-// RSA keys use RSA-PSS. This option has no effect for non-RSA keys.
-func (cs *CounterSigner) WithRSAPKCS1() *CounterSigner {
-	cs.family = familyRSAPKCS1
-	cs.familyExplicit = true
-	return cs
-}
-
-// WithSignerIdentifier controls how the counter-signer's certificate is
-// identified in its SignerInfo. Default is IssuerAndSerialNumber.
-func (cs *CounterSigner) WithSignerIdentifier(t SignerIdentifierType) *CounterSigner {
-	cs.sidType = t
-	return cs
-}
-
-// AddCertificate adds an extra certificate to the SignedData CertificateSet.
-func (cs *CounterSigner) AddCertificate(cert *x509.Certificate) *CounterSigner {
-	if cert == nil {
-		cs.errs = append(cs.errs, newConfigError("extra certificate is nil"))
-		return cs
-	}
-	cs.extraCerts = append(cs.extraCerts, cert)
-	return cs
+	return cs, nil
 }
 
 // CounterSign reads a DER-encoded CMS ContentInfo from r, appends a counter-
 // signature as an unsigned attribute (id-countersignature, OID 1.2.840.113549.1.9.6)
 // on every SignerInfo, and returns the updated DER-encoded ContentInfo.
 func (cs *CounterSigner) CounterSign(r io.Reader) ([]byte, error) {
-	if err := cs.validate(); err != nil {
-		return nil, err
-	}
-
 	// Parse the existing SignedData.
 	psd, err := ParseSignedData(r)
 	if err != nil {
@@ -148,20 +114,6 @@ func (cs *CounterSigner) CounterSign(r io.Reader) ([]byte, error) {
 	}
 
 	return marshalContentInfo(sd)
-}
-
-// validate checks that all required fields are set and no configuration errors
-// accumulated.
-func (cs *CounterSigner) validate() error {
-	var errs []error
-	errs = append(errs, cs.errs...)
-	if cs.cert == nil && len(cs.errs) == 0 {
-		errs = append(errs, newConfigError("certificate is required"))
-	}
-	if cs.key == nil && len(cs.errs) == 0 {
-		errs = append(errs, newConfigError("private key is required"))
-	}
-	return joinErrors(errs)
 }
 
 // buildCounterSigFor constructs the SignerInfo that counter-signs targetSI.

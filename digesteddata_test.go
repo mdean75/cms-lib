@@ -193,10 +193,9 @@ func TestDigest_PayloadTooLarge(t *testing.T) {
 func TestDigest_ParseWrongContentType(t *testing.T) {
 	// Build a SignedData ContentInfo and try to parse it as DigestedData.
 	rsaCert, rsaKey := generateSelfSignedRSA(t, 2048)
-	der, err := NewSigner().
-		WithCertificate(rsaCert).
-		WithPrivateKey(rsaKey).
-		Sign(FromBytes([]byte("content")))
+	s, err := NewSigner(rsaCert, rsaKey)
+	require.NoError(t, err)
+	der, err := s.Sign(FromBytes([]byte("content")))
 	require.NoError(t, err)
 
 	_, err = ParseDigestedData(FromBytes(der))

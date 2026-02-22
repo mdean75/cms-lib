@@ -78,11 +78,9 @@ func TestSignVerify_RSAPSSAttached(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	content := []byte("hello, cms")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithHash(crypto.SHA256).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key, WithHash(crypto.SHA256))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 	require.NotEmpty(t, der)
 
@@ -107,12 +105,9 @@ func TestSignVerify_RSAPKCS1Attached(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	content := []byte("pkcs1v15 test")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithRSAPKCS1().
-		WithHash(crypto.SHA256).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key, WithRSAPKCS1(), WithHash(crypto.SHA256))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -127,11 +122,9 @@ func TestSignVerify_ECDSAAttached(t *testing.T) {
 	cert, key := generateSelfSignedECDSA(t, elliptic.P256())
 	content := []byte("ecdsa test")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithHash(crypto.SHA256).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key, WithHash(crypto.SHA256))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -146,10 +139,9 @@ func TestSignVerify_Ed25519Attached(t *testing.T) {
 	cert, key := generateSelfSignedEd25519(t)
 	content := []byte("ed25519 test")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -164,11 +156,9 @@ func TestSignVerify_Detached(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	content := []byte("detached signature test")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithDetachedContent().
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key, WithDetachedContent())
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -194,10 +184,9 @@ func TestSignVerify_ZeroBytePayload(t *testing.T) {
 	// A signed 0-byte payload must be preserved as present (not treated as detached).
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte{}))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte{}))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -223,10 +212,9 @@ func TestSignVerify_VerifyDetachedOnAttached(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	content := []byte("attached")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -239,30 +227,21 @@ func TestSignVerify_VerifyDetachedOnAttached(t *testing.T) {
 // --- Builder validation tests ---
 
 func TestSigner_NilCertificateError(t *testing.T) {
-	_, err := NewSigner().
-		WithCertificate(nil).
-		WithPrivateKey(dummyKey(t)).
-		Sign(bytes.NewReader([]byte("x")))
+	_, err := NewSigner(nil, dummyKey(t))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
 }
 
 func TestSigner_NilKeyError(t *testing.T) {
 	cert, _ := generateSelfSignedRSA(t, 2048)
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(nil).
-		Sign(bytes.NewReader([]byte("x")))
+	_, err := NewSigner(cert, nil)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
 }
 
 func TestSigner_MultipleConfigErrors(t *testing.T) {
 	// Both nil cert and nil key should be reported together.
-	_, err := NewSigner().
-		WithCertificate(nil).
-		WithPrivateKey(nil).
-		Sign(bytes.NewReader([]byte("x")))
+	_, err := NewSigner(nil, nil)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
 	assert.Contains(t, err.Error(), "certificate is nil")
@@ -273,11 +252,7 @@ func TestSigner_ReservedAttributeRejected(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	oidMessageDigest := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 4}
 
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		AddAuthenticatedAttribute(oidMessageDigest, []byte("fake")).
-		Sign(bytes.NewReader([]byte("x")))
+	_, err := NewSigner(cert, key, AddAuthenticatedAttribute(oidMessageDigest, []byte("fake")))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrAttributeInvalid))
 }
@@ -288,11 +263,9 @@ func TestSigner_PayloadTooLarge(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
 	// Set a 10-byte limit and provide 11 bytes.
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithMaxAttachedContentSize(10).
-		Sign(bytes.NewReader(make([]byte, 11)))
+	s, err := NewSigner(cert, key, WithMaxAttachedContentSize(10))
+	require.NoError(t, err)
+	_, err = s.Sign(bytes.NewReader(make([]byte, 11)))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrPayloadTooLarge))
 }
@@ -301,11 +274,9 @@ func TestSigner_PayloadAtLimit(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
 	// Exactly at limit must succeed.
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithMaxAttachedContentSize(10).
-		Sign(bytes.NewReader(make([]byte, 10)))
+	s, err := NewSigner(cert, key, WithMaxAttachedContentSize(10))
+	require.NoError(t, err)
+	_, err = s.Sign(bytes.NewReader(make([]byte, 10)))
 	require.NoError(t, err)
 }
 
@@ -314,11 +285,9 @@ func TestSigner_UnlimitedSize(t *testing.T) {
 
 	// Unlimiteds must not be rejected even for large content.
 	content := make([]byte, 1024*1024) // 1 MiB
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithMaxAttachedContentSize(UnlimitedAttachedSize).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key, WithMaxAttachedContentSize(UnlimitedAttachedSize))
+	require.NoError(t, err)
+	_, err = s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 }
 
@@ -327,11 +296,9 @@ func TestSigner_UnlimitedSize(t *testing.T) {
 func TestSignVerify_SubjectKeyIdentifier(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithSignerIdentifier(SubjectKeyIdentifier).
-		Sign(bytes.NewReader([]byte("ski test")))
+	s, err := NewSigner(cert, key, WithSignerIdentifier(SubjectKeyIdentifier))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("ski test")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -348,10 +315,9 @@ func TestVerify_NoChainValidation(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	content := []byte("no chain")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -366,10 +332,9 @@ func TestVerify_WrongTrustRoot(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	otherCert, _ := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte("trust root test")))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("trust root test")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -388,11 +353,9 @@ func TestVerify_TamperedContent(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	original := []byte("original content")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithDetachedContent().
-		Sign(bytes.NewReader(original))
+	s, err := NewSigner(cert, key, WithDetachedContent())
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(original))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -409,11 +372,9 @@ func TestVerify_TamperedContent(t *testing.T) {
 func TestSignVerify_ECDSAP384(t *testing.T) {
 	cert, key := generateSelfSignedECDSA(t, elliptic.P384())
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithHash(crypto.SHA384).
-		Sign(bytes.NewReader([]byte("p384")))
+	s, err := NewSigner(cert, key, WithHash(crypto.SHA384))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("p384")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -427,11 +388,9 @@ func TestSignVerify_ECDSAP384(t *testing.T) {
 func TestSignVerify_ECDSAP521(t *testing.T) {
 	cert, key := generateSelfSignedECDSA(t, elliptic.P521())
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithHash(crypto.SHA512).
-		Sign(bytes.NewReader([]byte("p521")))
+	s, err := NewSigner(cert, key, WithHash(crypto.SHA512))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("p521")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -449,11 +408,9 @@ func TestSignVerify_Ed25519HashIgnored(t *testing.T) {
 	// override it to SHA-512 per RFC 8419 without returning an error.
 	cert, key := generateSelfSignedEd25519(t)
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithHash(crypto.SHA256). // must be silently overridden for Ed25519
-		Sign(bytes.NewReader([]byte("ed25519 hash override")))
+	s, err := NewSigner(cert, key, WithHash(crypto.SHA256)) // must be silently overridden for Ed25519
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("ed25519 hash override")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -470,11 +427,9 @@ func TestSignVerify_CustomAuthenticatedAttribute(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	customOID := asn1.ObjectIdentifier{1, 2, 3, 4, 5}
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		AddAuthenticatedAttribute(customOID, "custom-value").
-		Sign(bytes.NewReader([]byte("custom attr test")))
+	s, err := NewSigner(cert, key, AddAuthenticatedAttribute(customOID, "custom-value"))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("custom attr test")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -490,10 +445,9 @@ func TestSignVerify_CustomAuthenticatedAttribute(t *testing.T) {
 func TestVerify_ExpiredCertificate(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte("expired cert")))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("expired cert")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -529,9 +483,10 @@ func BenchmarkSign_RSAPSSAttached(b *testing.B) {
 	cert, key := benchRSACert(b)
 	content := make([]byte, 1024)
 
-	signer := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key)
+	signer, err := NewSigner(cert, key)
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	var r []byte
 	for b.Loop() {
@@ -584,11 +539,9 @@ func TestSignVerify_WithContentType(t *testing.T) {
 	customOID := asn1.ObjectIdentifier{1, 2, 3, 99, 1}
 	content := []byte("custom content type")
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithContentType(customOID).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key, WithContentType(customOID))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -602,11 +555,7 @@ func TestSignVerify_WithContentType(t *testing.T) {
 func TestSigner_EmptyContentTypeOIDError(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithContentType(asn1.ObjectIdentifier{}).
-		Sign(bytes.NewReader([]byte("x")))
+	_, err := NewSigner(cert, key, WithContentType(asn1.ObjectIdentifier{}))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
 }
@@ -617,11 +566,9 @@ func TestSignVerify_AddCertificate(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	extra, _ := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		AddCertificate(extra).
-		Sign(bytes.NewReader([]byte("extra cert")))
+	s, err := NewSigner(cert, key, AddCertificate(extra))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("extra cert")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -641,11 +588,9 @@ func TestSignVerify_AddUnauthenticatedAttribute(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	customOID := asn1.ObjectIdentifier{1, 2, 3, 99, 2}
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		AddUnauthenticatedAttribute(customOID, "unauth-value").
-		Sign(bytes.NewReader([]byte("unauth attr test")))
+	s, err := NewSigner(cert, key, AddUnauthenticatedAttribute(customOID, "unauth-value"))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("unauth attr test")))
 	require.NoError(t, err)
 
 	// Unsigned attrs do not affect signature validity.
@@ -664,16 +609,12 @@ func TestSignVerify_MultipleSigners(t *testing.T) {
 	cert2, key2 := generateSelfSignedECDSA(t, elliptic.P256())
 	content := []byte("multi-signer content")
 
-	second := NewSigner().
-		WithCertificate(cert2).
-		WithPrivateKey(key2).
-		WithHash(crypto.SHA256)
+	second, err := NewSigner(cert2, key2, WithHash(crypto.SHA256))
+	require.NoError(t, err)
 
-	der, err := NewSigner().
-		WithCertificate(cert1).
-		WithPrivateKey(key1).
-		WithAdditionalSigner(second).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert1, key1, WithAdditionalSigner(second))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -692,11 +633,7 @@ func TestSignVerify_MultipleSigners(t *testing.T) {
 func TestSigner_NilAdditionalSignerError(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithAdditionalSigner(nil).
-		Sign(bytes.NewReader([]byte("x")))
+	_, err := NewSigner(cert, key, WithAdditionalSigner(nil))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
 }
@@ -734,11 +671,9 @@ func TestSignVerify_CRLEmbedding(t *testing.T) {
 	require.NoError(t, err)
 	_ = caCert
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		AddCRL(crlBytes).
-		Sign(bytes.NewReader([]byte("crl test")))
+	s, err := NewSigner(cert, key, AddCRL(crlBytes))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("crl test")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -759,18 +694,16 @@ func TestCounterSign_RSAPSSAttached(t *testing.T) {
 	content := []byte("counter-sign test")
 
 	// Produce the original SignedData.
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader(content))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
 	require.NoError(t, err)
 
 	// Counter-sign with a second key.
 	csCert, csKey := generateSelfSignedRSA(t, 2048)
-	counterDER, err := NewCounterSigner().
-		WithCertificate(csCert).
-		WithPrivateKey(csKey).
-		CounterSign(bytes.NewReader(der))
+	cs, err := NewCounterSigner(csCert, csKey)
+	require.NoError(t, err)
+	counterDER, err := cs.CounterSign(bytes.NewReader(der))
 	require.NoError(t, err)
 	require.NotEmpty(t, counterDER)
 
@@ -828,11 +761,12 @@ func newMockTSA(t *testing.T, tsaCert *x509.Certificate, tsaKey crypto.Signer) *
 		}
 
 		// Create the timestamp token as a CMS SignedData.
-		tokenDER, err := NewSigner().
-			WithCertificate(tsaCert).
-			WithPrivateKey(tsaKey).
-			WithContentType(pkiasn1.OIDTSTInfo).
-			Sign(bytes.NewReader(tstDER))
+		tsaSigner, err := NewSigner(tsaCert, tsaKey, WithContentType(pkiasn1.OIDTSTInfo))
+		if err != nil {
+			http.Error(w, "configure signer", http.StatusInternalServerError)
+			return
+		}
+		tokenDER, err := tsaSigner.Sign(bytes.NewReader(tstDER))
 		if err != nil {
 			http.Error(w, "sign TSTInfo", http.StatusInternalServerError)
 			return
@@ -865,11 +799,9 @@ func TestSignVerify_WithTimestamp(t *testing.T) {
 	tsa := newMockTSA(t, tsaCert, tsaKey)
 	defer tsa.Close()
 
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithTimestamp(tsa.URL).
-		Sign(bytes.NewReader([]byte("timestamped content")))
+	s, err := NewSigner(cert, key, WithTimestamp(tsa.URL))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("timestamped content")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -883,11 +815,7 @@ func TestSignVerify_WithTimestamp(t *testing.T) {
 func TestSigner_EmptyTSAURLError(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	_, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithTimestamp("").
-		Sign(bytes.NewReader([]byte("x")))
+	_, err := NewSigner(cert, key, WithTimestamp(""))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
 }
@@ -901,19 +829,15 @@ func TestVerify_WrongTimestampToken(t *testing.T) {
 	defer tsa.Close()
 
 	// Sign message A with timestamp (token covers sig-of-A).
-	derA, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithTimestamp(tsa.URL).
-		Sign(bytes.NewReader([]byte("message A")))
+	sA, err := NewSigner(cert, key, WithTimestamp(tsa.URL))
+	require.NoError(t, err)
+	derA, err := sA.Sign(bytes.NewReader([]byte("message A")))
 	require.NoError(t, err)
 
 	// Sign message B with timestamp (token covers sig-of-B).
-	derB, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithTimestamp(tsa.URL).
-		Sign(bytes.NewReader([]byte("message B")))
+	sB, err := NewSigner(cert, key, WithTimestamp(tsa.URL))
+	require.NoError(t, err)
+	derB, err := sB.Sign(bytes.NewReader([]byte("message B")))
 	require.NoError(t, err)
 
 	// Parse both SignedDatas and swap B's unsigned attrs into A's SignerInfo.
@@ -941,16 +865,12 @@ func TestVerify_WrongTimestampToken(t *testing.T) {
 
 func TestCounterSign_NilCertError(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte("x")))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	_, err = s.Sign(bytes.NewReader([]byte("x")))
 	require.NoError(t, err)
 
-	_, err = NewCounterSigner().
-		WithCertificate(nil).
-		WithPrivateKey(dummyKey(t)).
-		CounterSign(bytes.NewReader(der))
+	_, err = NewCounterSigner(nil, dummyKey(t))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
 }
@@ -959,10 +879,9 @@ func TestCounterSign_NilCertError(t *testing.T) {
 
 func TestSigners_SingleRSA(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte("hello")))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("hello")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -980,10 +899,9 @@ func TestSigners_SingleRSA(t *testing.T) {
 
 func TestSigners_SingleECDSA(t *testing.T) {
 	cert, key := generateSelfSignedECDSA(t, elliptic.P256())
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte("hello ecdsa")))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("hello ecdsa")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -1000,13 +918,11 @@ func TestSigners_MultipleSigners(t *testing.T) {
 	cert1, key1 := generateSelfSignedRSA(t, 2048)
 	cert2, key2 := generateSelfSignedECDSA(t, elliptic.P256())
 
-	der, err := NewSigner().
-		WithCertificate(cert1).
-		WithPrivateKey(key1).
-		WithAdditionalSigner(NewSigner().
-			WithCertificate(cert2).
-			WithPrivateKey(key2)).
-		Sign(bytes.NewReader([]byte("multi")))
+	second, err := NewSigner(cert2, key2)
+	require.NoError(t, err)
+	s, err := NewSigner(cert1, key1, WithAdditionalSigner(second))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("multi")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -1019,20 +935,18 @@ func TestSigners_MultipleSigners(t *testing.T) {
 		cert1.SerialNumber.String(): true,
 		cert2.SerialNumber.String(): true,
 	}
-	for _, s := range signers {
-		require.NotNil(t, s.Certificate)
-		assert.True(t, serials[s.Certificate.SerialNumber.String()],
-			"unexpected serial %s", s.Certificate.SerialNumber)
+	for _, si := range signers {
+		require.NotNil(t, si.Certificate)
+		assert.True(t, serials[si.Certificate.SerialNumber.String()],
+			"unexpected serial %s", si.Certificate.SerialNumber)
 	}
 }
 
 func TestSigners_SubjectKeyIdentifier(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		WithSignerIdentifier(SubjectKeyIdentifier).
-		Sign(bytes.NewReader([]byte("ski")))
+	s, err := NewSigner(cert, key, WithSignerIdentifier(SubjectKeyIdentifier))
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("ski")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))
@@ -1055,10 +969,9 @@ func TestSigners_NoCertificateEmbedded(t *testing.T) {
 	// of scope for the builder. Instead, verify the existing Signers() contract
 	// against a standard message and trust the nil path via code inspection.
 	cert, key := generateSelfSignedRSA(t, 2048)
-	der, err := NewSigner().
-		WithCertificate(cert).
-		WithPrivateKey(key).
-		Sign(bytes.NewReader([]byte("no extra cert")))
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("no extra cert")))
 	require.NoError(t, err)
 
 	parsed, err := ParseSignedData(bytes.NewReader(der))

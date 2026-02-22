@@ -39,12 +39,9 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			name: "RSA PKCS1v15 attached SHA-256",
 			sign: func(t *testing.T) []byte {
 				cert, key := generateSelfSignedRSA(t, 2048)
-				der, err := NewSigner().
-					WithCertificate(cert).
-					WithPrivateKey(key).
-					WithRSAPKCS1().
-					WithHash(crypto.SHA256).
-					Sign(bytes.NewReader(content))
+				s, err := NewSigner(cert, key, WithRSAPKCS1(), WithHash(crypto.SHA256))
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},
@@ -53,11 +50,9 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			name: "RSA-PSS attached SHA-256",
 			sign: func(t *testing.T) []byte {
 				cert, key := generateSelfSignedRSA(t, 2048)
-				der, err := NewSigner().
-					WithCertificate(cert).
-					WithPrivateKey(key).
-					WithHash(crypto.SHA256).
-					Sign(bytes.NewReader(content))
+				s, err := NewSigner(cert, key, WithHash(crypto.SHA256))
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},
@@ -66,11 +61,9 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			name: "ECDSA P-256 attached SHA-256",
 			sign: func(t *testing.T) []byte {
 				cert, key := generateSelfSignedECDSA(t, elliptic.P256())
-				der, err := NewSigner().
-					WithCertificate(cert).
-					WithPrivateKey(key).
-					WithHash(crypto.SHA256).
-					Sign(bytes.NewReader(content))
+				s, err := NewSigner(cert, key, WithHash(crypto.SHA256))
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},
@@ -80,13 +73,9 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			detached: true,
 			sign: func(t *testing.T) []byte {
 				cert, key := generateSelfSignedRSA(t, 2048)
-				der, err := NewSigner().
-					WithCertificate(cert).
-					WithPrivateKey(key).
-					WithRSAPKCS1().
-					WithHash(crypto.SHA256).
-					WithDetachedContent().
-					Sign(bytes.NewReader(content))
+				s, err := NewSigner(cert, key, WithRSAPKCS1(), WithHash(crypto.SHA256), WithDetachedContent())
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},
@@ -96,12 +85,9 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			detached: true,
 			sign: func(t *testing.T) []byte {
 				cert, key := generateSelfSignedRSA(t, 2048)
-				der, err := NewSigner().
-					WithCertificate(cert).
-					WithPrivateKey(key).
-					WithHash(crypto.SHA256).
-					WithDetachedContent().
-					Sign(bytes.NewReader(content))
+				s, err := NewSigner(cert, key, WithHash(crypto.SHA256), WithDetachedContent())
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},

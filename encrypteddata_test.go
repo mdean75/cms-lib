@@ -127,10 +127,9 @@ func TestSymmetricEncrypt_PayloadTooLarge(t *testing.T) {
 // returns ErrParse when the ContentInfo does not wrap an EncryptedData OID.
 func TestSymmetricEncrypt_ParseWrongContentType(t *testing.T) {
 	rsaCert, rsaKey := generateSelfSignedRSA(t, 2048)
-	der, err := NewSigner().
-		WithCertificate(rsaCert).
-		WithPrivateKey(rsaKey).
-		Sign(FromBytes([]byte("content")))
+	s, err := NewSigner(rsaCert, rsaKey)
+	require.NoError(t, err)
+	der, err := s.Sign(FromBytes([]byte("content")))
 	require.NoError(t, err)
 
 	_, err = ParseEncryptedData(FromBytes(der))

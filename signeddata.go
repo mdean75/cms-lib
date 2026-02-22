@@ -28,10 +28,8 @@ const setTagByte = byte(0x31)
 // for the SignedAttributes field in SignerInfo.
 const implicitTag0Byte = byte(0xA0)
 
-// Signer builds and produces a CMS SignedData message. Builder methods accumulate
-// configuration and errors; Sign reports all configuration errors at once.
-// Signer methods are not safe for concurrent use; Sign is safe for concurrent use
-// once the builder is fully configured.
+// Signer produces a CMS SignedData message. Construct it with NewSigner;
+// Sign is safe for concurrent use once constructed.
 type Signer struct {
 	cert              *x509.Certificate
 	key               crypto.Signer
@@ -48,177 +46,45 @@ type Signer struct {
 	additionalSigners []*Signer
 	crls              [][]byte
 	tsaURL            string
-	errs              []error
 }
 
-// NewSigner returns a new Signer with default settings:
-//   - SHA-256 digest
-//   - Attached content
-//   - IssuerAndSerialNumber signer identifier
-//   - id-data content type
-//   - 64 MiB attached content size limit
-func NewSigner() *Signer {
-	return &Signer{
+// NewSigner constructs a Signer with the given certificate and private key.
+// Defaults: SHA-256 digest, attached content, IssuerAndSerialNumber signer
+// identifier, id-data content type, 64 MiB attached content size limit.
+// All configuration errors (nil cert, nil key, invalid options) are reported
+// together. Sign is safe for concurrent use once NewSigner returns successfully.
+func NewSigner(cert *x509.Certificate, key crypto.Signer, opts ...SignerOption) (*Signer, error) {
+	var errs []error
+	if cert == nil {
+		errs = append(errs, newConfigError("certificate is nil"))
+	}
+	if key == nil {
+		errs = append(errs, newConfigError("private key is nil"))
+	}
+
+	s := &Signer{
+		cert:        cert,
+		key:         key,
 		hash:        crypto.SHA256,
 		contentType: pkiasn1.OIDData,
 		maxSize:     DefaultMaxAttachedSize,
 	}
-}
 
-// WithCertificate sets the signing certificate. Required.
-func (s *Signer) WithCertificate(cert *x509.Certificate) *Signer {
-	if cert == nil {
-		s.errs = append(s.errs, newConfigError("certificate is nil"))
-		return s
+	for _, opt := range opts {
+		if err := opt.applyToSigner(s); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	s.cert = cert
-	return s
-}
 
-// WithPrivateKey sets the private key used for signing. Required.
-func (s *Signer) WithPrivateKey(key crypto.Signer) *Signer {
-	if key == nil {
-		s.errs = append(s.errs, newConfigError("private key is nil"))
-		return s
+	if err := joinErrors(errs); err != nil {
+		return nil, err
 	}
-	s.key = key
-	return s
-}
-
-// WithHash sets the digest algorithm. For Ed25519, this is ignored; SHA-512
-// is always used per RFC 8419. Defaults to SHA-256.
-func (s *Signer) WithHash(h crypto.Hash) *Signer {
-	s.hash = h
-	return s
-}
-
-// WithRSAPKCS1 selects RSA PKCS1v15 as the signature algorithm. By default,
-// RSA keys use RSA-PSS. This option has no effect for non-RSA keys.
-func (s *Signer) WithRSAPKCS1() *Signer {
-	s.family = familyRSAPKCS1
-	s.familyExplicit = true
-	return s
-}
-
-// WithDetachedContent produces a detached signature (eContent absent in output).
-// Detached mode streams content without buffering it; the size limit has no effect.
-func (s *Signer) WithDetachedContent() *Signer {
-	s.detached = true
-	return s
-}
-
-// WithSignerIdentifier controls how the signer's certificate is identified in
-// SignerInfo. Default is IssuerAndSerialNumber (SignerInfo version 1).
-func (s *Signer) WithSignerIdentifier(t SignerIdentifierType) *Signer {
-	s.sidType = t
-	return s
-}
-
-// WithContentType sets a custom eContentType OID. Default is id-data.
-// A non-id-data type forces SignedData version 3 per RFC 5652 §5.1.
-func (s *Signer) WithContentType(oid asn1.ObjectIdentifier) *Signer {
-	if len(oid) == 0 {
-		s.errs = append(s.errs, newConfigError("content type OID is empty"))
-		return s
-	}
-	s.contentType = oid
-	return s
-}
-
-// AddCertificate adds an extra certificate to the CertificateSet in the output
-// (for example, intermediate CA certificates needed for chain building).
-func (s *Signer) AddCertificate(cert *x509.Certificate) *Signer {
-	if cert == nil {
-		s.errs = append(s.errs, newConfigError("extra certificate is nil"))
-		return s
-	}
-	s.extraCerts = append(s.extraCerts, cert)
-	return s
-}
-
-// AddAuthenticatedAttribute adds a custom signed attribute. The content-type and
-// message-digest attributes are always injected automatically; callers must not
-// add those manually. Sign returns ErrAttributeInvalid if they do.
-func (s *Signer) AddAuthenticatedAttribute(oid asn1.ObjectIdentifier, val interface{}) *Signer {
-	encoded, err := asn1.Marshal(val)
-	if err != nil {
-		s.errs = append(s.errs, wrapError(CodeAttributeInvalid,
-			fmt.Sprintf("failed to marshal authenticated attribute %s", oid), err))
-		return s
-	}
-	s.authAttrs = append(s.authAttrs, pkiasn1.Attribute{
-		Type:   oid,
-		Values: asn1.RawValue{FullBytes: mustMarshalSet(encoded)},
-	})
-	return s
-}
-
-// AddUnauthenticatedAttribute adds a custom unsigned attribute.
-func (s *Signer) AddUnauthenticatedAttribute(oid asn1.ObjectIdentifier, val interface{}) *Signer {
-	encoded, err := asn1.Marshal(val)
-	if err != nil {
-		s.errs = append(s.errs, wrapError(CodeAttributeInvalid,
-			fmt.Sprintf("failed to marshal unauthenticated attribute %s", oid), err))
-		return s
-	}
-	s.unauthAttrs = append(s.unauthAttrs, pkiasn1.Attribute{
-		Type:   oid,
-		Values: asn1.RawValue{FullBytes: mustMarshalSet(encoded)},
-	})
-	return s
-}
-
-// WithMaxAttachedContentSize sets the maximum content size for attached signatures.
-// Defaults to DefaultMaxAttachedSize (64 MiB). Pass UnlimitedAttachedSize to disable.
-// Has no effect in detached mode.
-func (s *Signer) WithMaxAttachedContentSize(maxBytes int64) *Signer {
-	s.maxSize = maxBytes
-	return s
-}
-
-// WithAdditionalSigner adds a second (or subsequent) signer to the SignedData.
-// The additional signer must be configured with at least a certificate and private
-// key. All signers share the primary signer's content, content type, and
-// detached/attached setting.
-func (s *Signer) WithAdditionalSigner(other *Signer) *Signer {
-	if other == nil {
-		s.errs = append(s.errs, newConfigError("additional signer is nil"))
-		return s
-	}
-	s.additionalSigners = append(s.additionalSigners, other)
-	return s
-}
-
-// WithTimestamp requests an RFC 3161 timestamp from tsaURL after signing and
-// embeds it as an unsigned attribute (id-aa-signatureTimeStampToken) on each
-// SignerInfo. The timestamp covers the SignerInfo's Signature bytes.
-func (s *Signer) WithTimestamp(tsaURL string) *Signer {
-	if tsaURL == "" {
-		s.errs = append(s.errs, newConfigError("TSA URL is empty"))
-		return s
-	}
-	s.tsaURL = tsaURL
-	return s
-}
-
-// AddCRL embeds a DER-encoded Certificate Revocation List in the SignedData
-// revocationInfoChoices field.
-func (s *Signer) AddCRL(derCRL []byte) *Signer {
-	if len(derCRL) == 0 {
-		s.errs = append(s.errs, newConfigError("CRL DER bytes are empty"))
-		return s
-	}
-	s.crls = append(s.crls, derCRL)
-	return s
+	return s, nil
 }
 
 // Sign reads content from r, constructs a CMS SignedData, and returns the
-// DER-encoded ContentInfo. All builder configuration errors are reported here.
+// DER-encoded ContentInfo.
 func (s *Signer) Sign(r io.Reader) ([]byte, error) {
-	if err := s.validate(); err != nil {
-		return nil, err
-	}
-
 	// Read and optionally limit content.
 	content, err := s.readContent(r)
 	if err != nil {
@@ -350,38 +216,6 @@ func (s *Signer) signContent(content []byte, contentType asn1.ObjectIdentifier) 
 	}
 
 	return si, effectiveHash, nil
-}
-
-// validate checks that all required fields are set and no configuration errors
-// accumulated. Returns a joined error if any problems exist.
-func (s *Signer) validate() error {
-	var errs []error
-	errs = append(errs, s.errs...)
-	if s.cert == nil && len(s.errs) == 0 {
-		errs = append(errs, newConfigError("certificate is required"))
-	}
-	if s.key == nil && len(s.errs) == 0 {
-		errs = append(errs, newConfigError("private key is required"))
-	}
-
-	// Check for manually added reserved attributes.
-	for _, a := range s.authAttrs {
-		if a.Type.Equal(pkiasn1.OIDAttributeContentType) ||
-			a.Type.Equal(pkiasn1.OIDAttributeMessageDigest) {
-			errs = append(errs, newError(CodeAttributeInvalid,
-				fmt.Sprintf("attribute %s is injected automatically; do not add it manually", a.Type)))
-		}
-	}
-
-	// Validate additional signers.
-	for i, as := range s.additionalSigners {
-		if err := as.validate(); err != nil {
-			errs = append(errs, wrapError(CodeInvalidConfiguration,
-				fmt.Sprintf("additional signer[%d]", i), err))
-		}
-	}
-
-	return joinErrors(errs)
 }
 
 // readContent reads from r. In detached mode, content is discarded after hashing;

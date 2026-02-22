@@ -14,9 +14,9 @@ import (
 	"io"
 	"time"
 
-	"github.com/mdean75/cms/ber"
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
-	"github.com/mdean75/cms/internal/timestamp"
+	"github.com/mdean75/cms-lib/ber"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
+	"github.com/mdean75/cms-lib/internal/timestamp"
 )
 
 // setTagByte is the ASN.1 tag byte for an explicit SET OF, used when re-encoding

@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
 // SymmetricEncryptor builds a CMS EncryptedData message using a fluent builder

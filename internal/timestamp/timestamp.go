@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"time"
 
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
 // PKI status codes from RFC 3161, section 2.4.2.

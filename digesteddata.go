@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
 // Digester builds a CMS DigestedData message using a fluent builder API.

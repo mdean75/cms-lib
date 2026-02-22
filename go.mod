@@ -1,4 +1,4 @@
-module github.com/mdean75/cms
+module github.com/mdean75/cms-lib
 
 go 1.24
 

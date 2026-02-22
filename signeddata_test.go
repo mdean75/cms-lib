@@ -20,8 +20,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/mdean75/cms/internal/timestamp"
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	"github.com/mdean75/cms-lib/internal/timestamp"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
 // --- Test certificate helpers ---

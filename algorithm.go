@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"hash"
 
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
 // signatureFamily groups signing algorithms into mutually exclusive families

@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
 // buildTestToken constructs a minimal but structurally valid timestamp token

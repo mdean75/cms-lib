@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	pkiasn1 "github.com/mdean75/cms/internal/asn1"
+	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
 // kdfHash is the hash.Hash interface used by the X9.63 KDF.

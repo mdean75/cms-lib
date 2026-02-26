@@ -43,6 +43,7 @@ type Signer struct {
 	authAttrs         []pkiasn1.Attribute
 	unauthAttrs       []pkiasn1.Attribute
 	maxSize           int64
+	noCerts           bool
 	additionalSigners []*Signer
 	crls              [][]byte
 	tsaURL            string
@@ -475,13 +476,15 @@ func (s *Signer) buildSignedDataMulti(eci pkiasn1.EncapsulatedContentInfo, sis [
 		SignerInfos:      sis,
 	}
 
-	// Deduplicate certificates by raw DER bytes.
-	seen := make(map[string]bool)
-	for _, cert := range certs {
-		k := string(cert.Raw)
-		if !seen[k] {
-			seen[k] = true
-			sd.Certificates = append(sd.Certificates, asn1.RawValue{FullBytes: cert.Raw})
+	// Deduplicate certificates by raw DER bytes unless excluded.
+	if !s.noCerts {
+		seen := make(map[string]bool)
+		for _, cert := range certs {
+			k := string(cert.Raw)
+			if !seen[k] {
+				seen[k] = true
+				sd.Certificates = append(sd.Certificates, asn1.RawValue{FullBytes: cert.Raw})
+			}
 		}
 	}
 
@@ -601,10 +604,11 @@ func mustMarshalSet(inner []byte) []byte {
 type VerifyOption func(*verifyConfig)
 
 type verifyConfig struct {
-	roots      *x509.CertPool
-	noChain    bool
-	verifyTime time.Time
-	verifyOpts *x509.VerifyOptions
+	roots         *x509.CertPool
+	noChain       bool
+	verifyTime    time.Time
+	verifyOpts    *x509.VerifyOptions
+	externalCerts []*x509.Certificate
 }
 
 // WithSystemTrustStore uses the system root certificate store for chain validation.
@@ -643,6 +647,17 @@ func WithNoChainValidation() VerifyOption {
 func WithVerifyTime(t time.Time) VerifyOption {
 	return func(c *verifyConfig) {
 		c.verifyTime = t
+	}
+}
+
+// WithExternalCertificates supplies additional certificates for signer
+// identification and chain building. These supplement any certificates
+// embedded in the SignedData. Use this when the signer's certificates were
+// delivered out of band (e.g., the message was produced with
+// WithoutCertificates).
+func WithExternalCertificates(certs ...*x509.Certificate) VerifyOption {
+	return func(c *verifyConfig) {
+		c.externalCerts = append(c.externalCerts, certs...)
 	}
 }
 
@@ -824,7 +839,7 @@ func (p *ParsedSignedData) Signers() []SignerInfo {
 // absent or the SID cannot be parsed — callers holding the cert out of band
 // should call findSignerCert (which returns errors) during verification.
 func (p *ParsedSignedData) findSignerCertOrNil(si pkiasn1.SignerInfo) *x509.Certificate {
-	cert, err := p.findSignerCert(si)
+	cert, err := findSignerCert(p.certs, si)
 	if err != nil {
 		return nil
 	}
@@ -885,8 +900,16 @@ func (p *ParsedSignedData) verifyWithContent(content []byte, opts ...VerifyOptio
 
 // verifySigner verifies a single SignerInfo against the content.
 func (p *ParsedSignedData) verifySigner(si pkiasn1.SignerInfo, content []byte, cfg *verifyConfig) error {
+	// Merge embedded and external certificates for lookup.
+	allCerts := p.certs
+	if len(cfg.externalCerts) > 0 {
+		allCerts = make([]*x509.Certificate, 0, len(p.certs)+len(cfg.externalCerts))
+		allCerts = append(allCerts, p.certs...)
+		allCerts = append(allCerts, cfg.externalCerts...)
+	}
+
 	// Locate the signer certificate.
-	cert, err := p.findSignerCert(si)
+	cert, err := findSignerCert(allCerts, si)
 	if err != nil {
 		return err
 	}
@@ -937,7 +960,7 @@ func (p *ParsedSignedData) verifySigner(si pkiasn1.SignerInfo, content []byte, c
 
 	// Step 4: Chain validation (unless disabled).
 	if !cfg.noChain {
-		if err := validateChain(cert, p.certs, cfg); err != nil {
+		if err := validateChain(cert, allCerts, cfg); err != nil {
 			return err
 		}
 	}
@@ -978,14 +1001,14 @@ func verifyTimestampsInSI(si pkiasn1.SignerInfo) error {
 	return nil
 }
 
-// findSignerCert locates the signing certificate from the embedded certificates
+// findSignerCert locates the signing certificate from the given certificates
 // by matching the SignerIdentifier in the SignerInfo.
-func (p *ParsedSignedData) findSignerCert(si pkiasn1.SignerInfo) (*x509.Certificate, error) {
+func findSignerCert(certs []*x509.Certificate, si pkiasn1.SignerInfo) (*x509.Certificate, error) {
 	switch si.Version {
 	case 1:
-		return p.findCertByIssuerSerial(si.SID)
+		return findCertByIssuerSerial(certs, si.SID)
 	case 3:
-		return p.findCertBySKI(si.SID)
+		return findCertBySKI(certs, si.SID)
 	default:
 		return nil, newError(CodeVersionMismatch,
 			fmt.Sprintf("unsupported SignerInfo version %d", si.Version))
@@ -993,12 +1016,12 @@ func (p *ParsedSignedData) findSignerCert(si pkiasn1.SignerInfo) (*x509.Certific
 }
 
 // findCertByIssuerSerial matches a certificate by IssuerAndSerialNumber.
-func (p *ParsedSignedData) findCertByIssuerSerial(sid asn1.RawValue) (*x509.Certificate, error) {
+func findCertByIssuerSerial(certs []*x509.Certificate, sid asn1.RawValue) (*x509.Certificate, error) {
 	var isn pkiasn1.IssuerAndSerialNumber
 	if _, err := asn1.Unmarshal(sid.FullBytes, &isn); err != nil {
 		return nil, wrapError(CodeParse, "parsing IssuerAndSerialNumber", err)
 	}
-	for _, cert := range p.certs {
+	for _, cert := range certs {
 		if cert.SerialNumber.Cmp(isn.SerialNumber) == 0 &&
 			bytes.Equal(cert.RawIssuer, isn.Issuer.FullBytes) {
 			return cert, nil
@@ -1009,14 +1032,14 @@ func (p *ParsedSignedData) findCertByIssuerSerial(sid asn1.RawValue) (*x509.Cert
 }
 
 // findCertBySKI matches a certificate by SubjectKeyIdentifier.
-func (p *ParsedSignedData) findCertBySKI(sid asn1.RawValue) (*x509.Certificate, error) {
+func findCertBySKI(certs []*x509.Certificate, sid asn1.RawValue) (*x509.Certificate, error) {
 	// sid is [0] IMPLICIT OCTET STRING.
 	var ski []byte
 	rest, err := asn1.UnmarshalWithParams(sid.FullBytes, &ski, "tag:0")
 	if err != nil || len(rest) > 0 {
 		return nil, wrapError(CodeParse, "parsing SubjectKeyIdentifier from SID", err)
 	}
-	for _, cert := range p.certs {
+	for _, cert := range certs {
 		if bytes.Equal(cert.SubjectKeyId, ski) {
 			return cert, nil
 		}

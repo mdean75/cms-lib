@@ -215,3 +215,14 @@ func WithTimestamp(tsaURL string) SignerOption {
 		return nil
 	}}
 }
+
+// WithoutCertificates omits all certificates from the SignedData output. Use
+// this when certificates are delivered out of band. The Certificates field in
+// RFC 5652 SignedData is OPTIONAL, so the output is a valid CMS message.
+// Any certificates added via AddCertificate are silently ignored.
+func WithoutCertificates() SignerOption {
+	return &signerOption{f: func(s *Signer) error {
+		s.noCerts = true
+		return nil
+	}}
+}

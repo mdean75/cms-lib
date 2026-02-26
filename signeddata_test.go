@@ -982,3 +982,122 @@ func TestSigners_NoCertificateEmbedded(t *testing.T) {
 	require.Len(t, signers, 1)
 	assert.NotNil(t, signers[0].Certificate)
 }
+
+// --- WithoutCertificates / WithExternalCertificates tests ---
+
+func TestSignVerify_WithoutCertificates(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []SignerOption
+	}{
+		{
+			name: "RSA-PSS without certificates",
+			opts: []SignerOption{WithoutCertificates()},
+		},
+		{
+			name: "RSA-PSS without certificates and extra cert ignored",
+			opts: nil, // populated below with AddCertificate + WithoutCertificates
+		},
+	}
+
+	cert, key := generateSelfSignedRSA(t, 2048)
+	extraCert, _ := generateSelfSignedRSA(t, 2048)
+
+	// Build the second test case with AddCertificate that should be silently ignored.
+	tests[1].opts = []SignerOption{AddCertificate(extraCert), WithoutCertificates()}
+
+	content := []byte("hello, no certs")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := NewSigner(cert, key, tt.opts...)
+			require.NoError(t, err)
+
+			der, err := s.Sign(bytes.NewReader(content))
+			require.NoError(t, err)
+
+			parsed, err := ParseSignedData(bytes.NewReader(der))
+			require.NoError(t, err)
+
+			// No certificates should be embedded.
+			assert.Empty(t, parsed.Certificates())
+
+			// Verification without external certs must fail.
+			pool := x509.NewCertPool()
+			pool.AddCert(cert)
+			err = parsed.Verify(WithTrustRoots(pool))
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrMissingCertificate))
+
+			// Verification with external certs must succeed.
+			err = parsed.Verify(WithExternalCertificates(cert), WithTrustRoots(pool))
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestVerify_ExternalCertificatesMergedWithEmbedded(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	content := []byte("merged certs test")
+
+	// Sign normally (cert embedded).
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	// Provide the same cert externally — should still verify (no duplicates issue).
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	err = parsed.Verify(WithExternalCertificates(cert), WithTrustRoots(pool))
+	require.NoError(t, err)
+}
+
+func TestSignVerify_WithoutCertificatesDetached(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	content := []byte("detached no certs")
+
+	s, err := NewSigner(cert, key, WithoutCertificates(), WithDetachedContent())
+	require.NoError(t, err)
+
+	der, err := s.Sign(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	assert.Empty(t, parsed.Certificates())
+	assert.True(t, parsed.IsDetached())
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	err = parsed.VerifyDetached(bytes.NewReader(content),
+		WithExternalCertificates(cert), WithTrustRoots(pool))
+	require.NoError(t, err)
+}
+
+func TestSignVerify_WithoutCertificatesSKI(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	content := []byte("ski no certs")
+
+	s, err := NewSigner(cert, key,
+		WithoutCertificates(),
+		WithSignerIdentifier(SubjectKeyIdentifier))
+	require.NoError(t, err)
+
+	der, err := s.Sign(bytes.NewReader(content))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	assert.Empty(t, parsed.Certificates())
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	err = parsed.Verify(WithExternalCertificates(cert), WithTrustRoots(pool))
+	require.NoError(t, err)
+}

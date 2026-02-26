@@ -652,9 +652,18 @@ func WithVerifyTime(t time.Time) VerifyOption {
 
 // WithExternalCertificates supplies additional certificates for signer
 // identification and chain building. These supplement any certificates
-// embedded in the SignedData. Use this when the signer's certificates were
+// embedded in the SignedData. Use this when the signer's certificate was
 // delivered out of band (e.g., the message was produced with
 // WithoutCertificates).
+//
+// Multiple certificates may be provided. Each message's SignerInfo contains a
+// SignerIdentifier (IssuerAndSerialNumber or SubjectKeyIdentifier) that the
+// library uses to select the correct certificate automatically. This means
+// callers can safely pass several certificates for the same peer simultaneously
+// — for example, during a certificate rotation where messages signed by both
+// the old and new certificate may be in flight at the same time. Retain the
+// old certificate in your store until its NotAfter has passed and you are
+// confident no further messages signed with it will arrive; then prune it.
 func WithExternalCertificates(certs ...*x509.Certificate) VerifyOption {
 	return func(c *verifyConfig) {
 		c.externalCerts = append(c.externalCerts, certs...)

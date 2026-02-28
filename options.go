@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
+	"time"
 
 	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
@@ -54,8 +55,8 @@ func (o *signingOption) applyToCounterSigner(cs *CounterSigner) error {
 // SHA-512 per RFC 8419 regardless of this setting. Defaults to SHA-256.
 func WithHash(h crypto.Hash) SigningOption {
 	return &signingOption{
-		signerFn:  func(s *Signer) error { s.hash = h; return nil },
-		counterFn: func(cs *CounterSigner) error { cs.hash = h; return nil },
+		signerFn:  func(s *Signer) error { s.hash = h; s.hashExplicit = true; return nil },
+		counterFn: func(cs *CounterSigner) error { cs.hash = h; cs.hashExplicit = true; return nil },
 	}
 }
 
@@ -101,6 +102,34 @@ func AddCertificate(cert *x509.Certificate) SigningOption {
 				return newConfigError("extra certificate is nil")
 			}
 			cs.extraCerts = append(cs.extraCerts, cert)
+			return nil
+		},
+	}
+}
+
+// AddCertificateChain adds multiple certificates to the CertificateSet in the
+// output. This is a convenience for embedding an entire certificate chain
+// (typically intermediates and/or root CA) in a single call. The certificates
+// are purely transport for the verifier's chain-building benefit — they have no
+// effect on the signing operation itself.
+func AddCertificateChain(certs ...*x509.Certificate) SigningOption {
+	return &signingOption{
+		signerFn: func(s *Signer) error {
+			for i, cert := range certs {
+				if cert == nil {
+					return newConfigError(fmt.Sprintf("certificate at index %d in chain is nil", i))
+				}
+				s.extraCerts = append(s.extraCerts, cert)
+			}
+			return nil
+		},
+		counterFn: func(cs *CounterSigner) error {
+			for i, cert := range certs {
+				if cert == nil {
+					return newConfigError(fmt.Sprintf("certificate at index %d in chain is nil", i))
+				}
+				cs.extraCerts = append(cs.extraCerts, cert)
+			}
 			return nil
 		},
 	}
@@ -153,14 +182,18 @@ func WithAdditionalSigner(other *Signer) SignerOption {
 	}}
 }
 
-// AddAuthenticatedAttribute adds a custom signed attribute. The content-type and
-// message-digest attributes are always injected automatically; callers must not
-// add those manually. NewSigner returns ErrAttributeInvalid if they do.
+// AddAuthenticatedAttribute adds a custom signed attribute. The content-type,
+// message-digest, and signing-time attributes are managed by the library;
+// callers must not add those manually. For signing-time, use WithSigningTimeFunc
+// instead. NewSigner returns ErrAttributeInvalid if any reserved attribute is
+// provided.
 func AddAuthenticatedAttribute(oid asn1.ObjectIdentifier, val any) SignerOption {
 	return &signerOption{f: func(s *Signer) error {
-		if oid.Equal(pkiasn1.OIDAttributeContentType) || oid.Equal(pkiasn1.OIDAttributeMessageDigest) {
+		if oid.Equal(pkiasn1.OIDAttributeContentType) ||
+			oid.Equal(pkiasn1.OIDAttributeMessageDigest) ||
+			oid.Equal(pkiasn1.OIDAttributeSigningTime) {
 			return newError(CodeAttributeInvalid,
-				fmt.Sprintf("attribute %s is injected automatically; do not add it manually", oid))
+				fmt.Sprintf("attribute %s is managed by the library; do not add it manually", oid))
 		}
 		encoded, err := asn1.Marshal(val)
 		if err != nil {
@@ -212,6 +245,29 @@ func WithTimestamp(tsaURL string) SignerOption {
 			return newConfigError("TSA URL is empty")
 		}
 		s.tsaURL = tsaURL
+		return nil
+	}}
+}
+
+// WithSigningTimeFunc sets a clock function called at each Sign() invocation to
+// embed an id-signingTime authenticated attribute (RFC 5652 §11.3). Pass
+// time.Now to use the system clock:
+//
+//	cms.NewSigner(cert, key, cms.WithSigningTimeFunc(time.Now))
+//
+// The clock is called inside Sign(), so each call captures the time at the
+// moment of signing rather than at signer construction time. If not configured,
+// no signing-time attribute is included.
+//
+// Note: id-signingTime carries the time claimed by the signer and is not
+// cryptographically bound to a trusted source. For a verifiable trusted
+// timestamp, use WithTimestamp instead.
+func WithSigningTimeFunc(clock func() time.Time) SignerOption {
+	return &signerOption{f: func(s *Signer) error {
+		if clock == nil {
+			return newConfigError("WithSigningTimeFunc: clock function must not be nil")
+		}
+		s.clockFn = clock
 		return nil
 	}}
 }

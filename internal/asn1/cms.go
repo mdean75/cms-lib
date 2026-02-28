@@ -27,10 +27,10 @@ type SignedData struct {
 	EncapContentInfo EncapsulatedContentInfo
 	// Certificates is an optional SET of certificate choices for chain building.
 	// Encoded with IMPLICIT tag [0].
-	Certificates []asn1.RawValue `asn1:"optional,tag:0"`
+	Certificates []asn1.RawValue `asn1:"optional,set,tag:0"`
 	// CRLs is an optional SET of revocation information choices.
 	// Encoded with IMPLICIT tag [1].
-	CRLs []asn1.RawValue `asn1:"optional,tag:1"`
+	CRLs []asn1.RawValue `asn1:"optional,set,tag:1"`
 	// SignerInfos is the SET of per-signer signature information structures.
 	SignerInfos []SignerInfo `asn1:"set"`
 }
@@ -83,7 +83,7 @@ type SignerInfo struct {
 	Signature []byte
 	// UnsignedAttrs is the optional SET of unsigned attributes, encoded with IMPLICIT
 	// tag [1]. Counter-signatures and RFC 3161 timestamp tokens appear here.
-	UnsignedAttrs asn1.RawValue `asn1:"optional,tag:1"`
+	UnsignedAttrs asn1.RawValue `asn1:"optional,set,tag:1"`
 }
 
 // Attribute represents a single CMS attribute as defined in RFC 5652, section 5.3.

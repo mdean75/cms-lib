@@ -92,12 +92,35 @@ func newHash(h crypto.Hash) (hash.Hash, error) {
 
 // hashForKey returns the effective crypto.Hash for a given key type and the
 // caller-requested hash. For Ed25519 the hash is forced to SHA-512 per RFC 8419
-// regardless of what the caller specified.
-func hashForKey(key crypto.Signer, requested crypto.Hash) crypto.Hash {
-	if _, ok := key.Public().(ed25519.PublicKey); ok {
+// regardless of what the caller specified. For ECDSA, when the hash was not
+// explicitly chosen, the hash is auto-selected to match the curve's security
+// level: P-256 → SHA-256, P-384 → SHA-384, P-521 → SHA-512.
+func hashForKey(key crypto.Signer, requested crypto.Hash, explicit bool) crypto.Hash {
+	switch pub := key.Public().(type) {
+	case ed25519.PublicKey:
 		return crypto.SHA512
+	case *ecdsa.PublicKey:
+		if !explicit {
+			return hashForCurve(pub)
+		}
+		return requested
+	default:
+		return requested
 	}
-	return requested
+}
+
+// hashForCurve returns the digest algorithm that matches the ECDSA curve's
+// security level: P-256 → SHA-256, P-384 → SHA-384, P-521 → SHA-512.
+// Falls back to SHA-256 for unrecognized curves.
+func hashForCurve(pub *ecdsa.PublicKey) crypto.Hash {
+	switch pub.Curve.Params().BitSize {
+	case 384:
+		return crypto.SHA384
+	case 521:
+		return crypto.SHA512
+	default:
+		return crypto.SHA256
+	}
 }
 
 // signatureAlgID returns the pkix.AlgorithmIdentifier for the signature algorithm

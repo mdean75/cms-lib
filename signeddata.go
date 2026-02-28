@@ -34,6 +34,7 @@ type Signer struct {
 	cert              *x509.Certificate
 	key               crypto.Signer
 	hash              crypto.Hash
+	hashExplicit      bool // true when hash was set via WithHash option
 	family            signatureFamily
 	familyExplicit    bool // true when family was set via WithRSAPKCS1 option
 	detached          bool
@@ -47,6 +48,7 @@ type Signer struct {
 	additionalSigners []*Signer
 	crls              [][]byte
 	tsaURL            string
+	clockFn           func() time.Time
 }
 
 // NewSigner constructs a Signer with the given certificate and private key.
@@ -61,6 +63,11 @@ func NewSigner(cert *x509.Certificate, key crypto.Signer, opts ...SignerOption) 
 	}
 	if key == nil {
 		errs = append(errs, newConfigError("private key is nil"))
+	}
+	if cert != nil && key != nil {
+		if err := validateCertKeyPair(cert, key); err != nil {
+			errs = append(errs, err)
+		}
 	}
 
 	s := &Signer{
@@ -165,7 +172,7 @@ func (s *Signer) Sign(r io.Reader) ([]byte, error) {
 // contentType is passed explicitly so additional signers use the primary signer's
 // eContentType in their signed attributes.
 func (s *Signer) signContent(content []byte, contentType asn1.ObjectIdentifier) (pkiasn1.SignerInfo, crypto.Hash, error) {
-	effectiveHash := hashForKey(s.key, s.hash)
+	effectiveHash := hashForKey(s.key, s.hash, s.hashExplicit)
 
 	family := s.family
 	if !s.familyExplicit {
@@ -271,6 +278,18 @@ func (s *Signer) buildSignedAttrsForType(digest []byte, contentType asn1.ObjectI
 			Values: asn1.RawValue{FullBytes: mustMarshalSet(mdVal)},
 		},
 	}
+
+	if s.clockFn != nil {
+		stVal, err := asn1.Marshal(s.clockFn().UTC())
+		if err != nil {
+			return nil, wrapError(CodeParse, "marshal signing-time attribute", err)
+		}
+		attrs = append(attrs, pkiasn1.Attribute{
+			Type:   pkiasn1.OIDAttributeSigningTime,
+			Values: asn1.RawValue{FullBytes: mustMarshalSet(stVal)},
+		})
+	}
+
 	attrs = append(attrs, s.authAttrs...)
 	return attrs, nil
 }
@@ -513,6 +532,23 @@ func deduplicateDigestAlgs(hashes []crypto.Hash) ([]pkix.AlgorithmIdentifier, er
 		}
 	}
 	return algs, nil
+}
+
+// validateCertKeyPair checks that the certificate's public key matches the
+// signer's public key. Returns ErrInvalidConfiguration on mismatch.
+func validateCertKeyPair(cert *x509.Certificate, key crypto.Signer) error {
+	certPub, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	if err != nil {
+		return wrapError(CodeInvalidConfiguration, "failed to marshal certificate public key", err)
+	}
+	signerPub, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		return wrapError(CodeInvalidConfiguration, "failed to marshal signer public key", err)
+	}
+	if !bytes.Equal(certPub, signerPub) {
+		return newConfigError("certificate public key does not match the provided private key")
+	}
+	return nil
 }
 
 // computeSignedDataVersion computes the required SignedData version per RFC 5652 §5.1.

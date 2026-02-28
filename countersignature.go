@@ -21,6 +21,7 @@ type CounterSigner struct {
 	cert           *x509.Certificate
 	key            crypto.Signer
 	hash           crypto.Hash
+	hashExplicit   bool
 	family         signatureFamily
 	familyExplicit bool
 	sidType        SignerIdentifierType
@@ -120,7 +121,7 @@ func (cs *CounterSigner) CounterSign(r io.Reader) ([]byte, error) {
 // The counter-signature signs targetSI.Signature with signed attributes where
 // content-type is id-data and message-digest is hash(targetSI.Signature).
 func (cs *CounterSigner) buildCounterSigFor(targetSI pkiasn1.SignerInfo) (pkiasn1.SignerInfo, error) {
-	effectiveHash := hashForKey(cs.key, cs.hash)
+	effectiveHash := hashForKey(cs.key, cs.hash, cs.hashExplicit)
 
 	family := cs.family
 	if !cs.familyExplicit {

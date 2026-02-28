@@ -257,6 +257,91 @@ func TestSigner_ReservedAttributeRejected(t *testing.T) {
 	assert.True(t, errors.Is(err, ErrAttributeInvalid))
 }
 
+// --- Cert-key pair validation ---
+
+func TestSigner_MismatchedCertAndKeyError(t *testing.T) {
+	tests := []struct {
+		name string
+		cert *x509.Certificate
+		key  crypto.Signer
+	}{
+		{
+			name: "RSA cert with ECDSA key",
+			cert: func() *x509.Certificate { c, _ := generateSelfSignedRSA(t, 2048); return c }(),
+			key:  func() crypto.Signer { _, k := generateSelfSignedECDSA(t, elliptic.P256()); return k }(),
+		},
+		{
+			name: "ECDSA cert with RSA key",
+			cert: func() *x509.Certificate { c, _ := generateSelfSignedECDSA(t, elliptic.P256()); return c }(),
+			key:  func() crypto.Signer { _, k := generateSelfSignedRSA(t, 2048); return k }(),
+		},
+		{
+			name: "RSA cert with different RSA key",
+			cert: func() *x509.Certificate { c, _ := generateSelfSignedRSA(t, 2048); return c }(),
+			key:  func() crypto.Signer { _, k := generateSelfSignedRSA(t, 2048); return k }(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewSigner(tt.cert, tt.key)
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, ErrInvalidConfiguration))
+			assert.Contains(t, err.Error(), "does not match")
+		})
+	}
+}
+
+func TestSigner_MatchingCertAndKeyOK(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	_, err := NewSigner(cert, key)
+	require.NoError(t, err)
+}
+
+// --- AddCertificateChain tests ---
+
+func TestAddCertificateChain_AllCertsEmbedded(t *testing.T) {
+	leaf, key := generateSelfSignedRSA(t, 2048)
+	inter1, _ := generateSelfSignedRSA(t, 2048)
+	inter2, _ := generateSelfSignedRSA(t, 2048)
+
+	signer, err := NewSigner(leaf, key, AddCertificateChain(inter1, inter2))
+	require.NoError(t, err)
+
+	der, err := signer.Sign(bytes.NewReader([]byte("hello")))
+	require.NoError(t, err)
+
+	sd, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	// Expect leaf + 2 chain certs = 3
+	assert.Len(t, sd.certs, 3)
+}
+
+func TestAddCertificateChain_NilCertError(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	inter, _ := generateSelfSignedRSA(t, 2048)
+
+	_, err := NewSigner(cert, key, AddCertificateChain(inter, nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "index 1")
+}
+
+func TestAddCertificateChain_EmptyIsNoop(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+
+	signer, err := NewSigner(cert, key, AddCertificateChain())
+	require.NoError(t, err)
+
+	der, err := signer.Sign(bytes.NewReader([]byte("hello")))
+	require.NoError(t, err)
+
+	sd, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	// Only the leaf cert
+	assert.Len(t, sd.certs, 1)
+}
+
 // --- Size limit tests ---
 
 func TestSigner_PayloadTooLarge(t *testing.T) {
@@ -401,6 +486,56 @@ func TestSignVerify_ECDSAP521(t *testing.T) {
 	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
 }
 
+// --- ECDSA auto-hash selection ---
+
+func TestSignVerify_ECDSAP384_AutoHash(t *testing.T) {
+	cert, key := generateSelfSignedECDSA(t, elliptic.P384())
+
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("p384-auto")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+func TestSignVerify_ECDSAP521_AutoHash(t *testing.T) {
+	cert, key := generateSelfSignedECDSA(t, elliptic.P521())
+
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("p521-auto")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+func TestSignVerify_ECDSAP256_DefaultsToSHA256(t *testing.T) {
+	cert, key := generateSelfSignedECDSA(t, elliptic.P256())
+
+	s, err := NewSigner(cert, key)
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("p256-default")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
 // --- Ed25519 hash override ---
 
 func TestSignVerify_Ed25519HashIgnored(t *testing.T) {
@@ -438,6 +573,134 @@ func TestSignVerify_CustomAuthenticatedAttribute(t *testing.T) {
 	pool := x509.NewCertPool()
 	pool.AddCert(cert)
 	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+}
+
+// --- Signing time ---
+
+// extractSigningTime parses the id-signingTime authenticated attribute from the
+// first SignerInfo of parsed. Fails the test if the attribute is absent.
+func extractSigningTime(t *testing.T, parsed *ParsedSignedData) time.Time {
+	t.Helper()
+	si := parsed.signedData.SignerInfos[0]
+	rawAttrs := si.SignedAttrs.FullBytes
+	require.NotEmpty(t, rawAttrs, "SignedAttrs must be present")
+
+	// Wire form uses IMPLICIT [0]; retag as SET for attribute parsing.
+	setBytes := make([]byte, len(rawAttrs))
+	copy(setBytes, rawAttrs)
+	setBytes[0] = 0x31
+
+	var attrs pkiasn1.RawAttributes
+	_, err := asn1.UnmarshalWithParams(setBytes, &attrs, "set")
+	require.NoError(t, err)
+
+	for _, attr := range attrs {
+		if attr.Type.Equal(pkiasn1.OIDAttributeSigningTime) {
+			// attr.Values.Bytes is the content of the SET (the encoded time value).
+			var got time.Time
+			_, parseErr := asn1.Unmarshal(attr.Values.Bytes, &got)
+			require.NoError(t, parseErr)
+			return got
+		}
+	}
+	t.Fatal("id-signingTime attribute not found in SignerInfo")
+	return time.Time{}
+}
+
+func TestSigningTimeFunc_AttributePresentAndCorrect(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	fixedTime := time.Date(2026, 2, 27, 12, 0, 0, 0, time.UTC)
+
+	s, err := NewSigner(cert, key, WithSigningTimeFunc(func() time.Time { return fixedTime }))
+	require.NoError(t, err)
+
+	der, err := s.Sign(bytes.NewReader([]byte("hello")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	require.NoError(t, parsed.Verify(WithTrustRoots(pool)))
+
+	// UTCTime has second precision; truncate both sides before comparing.
+	got := extractSigningTime(t, parsed)
+	assert.Equal(t, fixedTime.Truncate(time.Second), got.UTC().Truncate(time.Second))
+}
+
+func TestSigningTimeFunc_PerSignCall(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+
+	// Each call to the clock advances by one hour.
+	call := 0
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time {
+		call++
+		return base.Add(time.Duration(call) * time.Hour)
+	}
+
+	s, err := NewSigner(cert, key, WithSigningTimeFunc(clock))
+	require.NoError(t, err)
+
+	der1, err := s.Sign(bytes.NewReader([]byte("msg1")))
+	require.NoError(t, err)
+	der2, err := s.Sign(bytes.NewReader([]byte("msg2")))
+	require.NoError(t, err)
+
+	p1, err := ParseSignedData(bytes.NewReader(der1))
+	require.NoError(t, err)
+	p2, err := ParseSignedData(bytes.NewReader(der2))
+	require.NoError(t, err)
+
+	t1 := extractSigningTime(t, p1)
+	t2 := extractSigningTime(t, p2)
+	assert.True(t, t2.After(t1), "second Sign() call should embed a later time than the first")
+}
+
+func TestSigningTimeFunc_AbsentByDefault(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+
+	s, err := NewSigner(cert, key) // no WithSigningTimeFunc
+	require.NoError(t, err)
+	der, err := s.Sign(bytes.NewReader([]byte("no signing time")))
+	require.NoError(t, err)
+
+	parsed, err := ParseSignedData(bytes.NewReader(der))
+	require.NoError(t, err)
+
+	si := parsed.signedData.SignerInfos[0]
+	rawAttrs := si.SignedAttrs.FullBytes
+	require.NotEmpty(t, rawAttrs)
+
+	setBytes := make([]byte, len(rawAttrs))
+	copy(setBytes, rawAttrs)
+	setBytes[0] = 0x31
+
+	var attrs pkiasn1.RawAttributes
+	_, err = asn1.UnmarshalWithParams(setBytes, &attrs, "set")
+	require.NoError(t, err)
+
+	for _, attr := range attrs {
+		assert.False(t, attr.Type.Equal(pkiasn1.OIDAttributeSigningTime),
+			"id-signingTime must not be present when WithSigningTimeFunc is not configured")
+	}
+}
+
+func TestSigningTimeFunc_NilClockError(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	_, err := NewSigner(cert, key, WithSigningTimeFunc(nil))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrInvalidConfiguration))
+}
+
+func TestSigningTimeFunc_ReservedAttributeRejected(t *testing.T) {
+	cert, key := generateSelfSignedRSA(t, 2048)
+	oidSigningTime := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 5}
+
+	_, err := NewSigner(cert, key, AddAuthenticatedAttribute(oidSigningTime, time.Now()))
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, ErrAttributeInvalid))
 }
 
 // --- Verify time ---

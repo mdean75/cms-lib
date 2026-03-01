@@ -1170,7 +1170,7 @@ func verifySignature(cert *x509.Certificate, si pkiasn1.SignerInfo, digest []byt
 		if !ok {
 			return newError(CodeInvalidSignature, "signature algorithm is RSA-PSS but certificate has non-RSA key")
 		}
-		saltLen, err := saltLengthForHash(h)
+		saltLen, err := saltLenFromPSSParams(si.SignatureAlgorithm, h)
 		if err != nil {
 			return err
 		}

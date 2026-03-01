@@ -201,6 +201,27 @@ func mgf1AlgID(hashOID asn1.ObjectIdentifier) pkix.AlgorithmIdentifier {
 	}
 }
 
+// saltLenFromPSSParams reads the SaltLength from an RSASSA-PSS
+// AlgorithmIdentifier's parameters field. When the field is absent or the
+// SaltLength sub-field is zero (the RFC 4055 default of 20), the function
+// falls back to saltLengthForHash so that our generated signatures remain
+// verifiable against well-formed params.
+func saltLenFromPSSParams(algID pkix.AlgorithmIdentifier, h crypto.Hash) (int, error) {
+	if len(algID.Parameters.FullBytes) == 0 {
+		return saltLengthForHash(h)
+	}
+	var params pkiasn1.RSAPSSParams
+	if _, err := asn1.Unmarshal(algID.Parameters.FullBytes, &params); err != nil {
+		return 0, wrapError(CodeParse, "parsing RSASSA-PSS-params for salt length", err)
+	}
+	if params.SaltLength == 0 {
+		// SaltLength absent means the RFC 4055 default (20). Use hash output
+		// size instead since we only allow SHA-256+.
+		return saltLengthForHash(h)
+	}
+	return params.SaltLength, nil
+}
+
 // saltLengthForHash returns the salt length equal to the hash output length,
 // which is the recommended practice for RSA-PSS.
 func saltLengthForHash(h crypto.Hash) (int, error) {

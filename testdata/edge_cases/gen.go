@@ -271,9 +271,17 @@ func genBERConstructedOctet(sd pkiasn1.SignedData, content []byte) {
 	inner := append(chunk1, chunk2...)
 	constructed := append([]byte{0x24, byte(len(inner))}, inner...)
 
-	// Place constructed OCTET STRING in EContent.Bytes (will be wrapped in
-	// [0] EXPLICIT during marshaling of EncapsulatedContentInfo).
-	sd.EncapContentInfo.EContent.Bytes = constructed
+	// Build the [0] EXPLICIT wrapper containing the constructed OCTET STRING and
+	// assign it to EContent.FullBytes directly. asn1.Marshal ignores struct tag
+	// annotations (including explicit,tag:0) when FullBytes is non-empty, so we
+	// must pre-build the complete wrapper here.
+	outerWrapper, _ := asn1.Marshal(asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        0,
+		IsCompound: true,
+		Bytes:      constructed,
+	})
+	sd.EncapContentInfo.EContent = asn1.RawValue{FullBytes: outerWrapper}
 
 	write(outDir+"/ber_constructed_octet.der", wrapSD(sd))
 }

@@ -267,6 +267,7 @@ openssl cms -encrypt \
     -in "$CONTENT" \
     -out rsa_oaep_sha1_aes256cbc.der \
     -outform DER \
+    -binary \
     -recip rsa_recip.cert.pem \
     -aes-256-cbc \
     -keyopt rsa_padding_mode:oaep
@@ -276,6 +277,7 @@ openssl cms -encrypt \
     -in "$CONTENT" \
     -out rsa_oaep_sha256_aes256cbc.der \
     -outform DER \
+    -binary \
     -recip rsa_recip.cert.pem \
     -aes-256-cbc \
     -keyopt rsa_padding_mode:oaep \
@@ -286,6 +288,7 @@ openssl cms -encrypt \
     -in "$CONTENT" \
     -out rsa_oaep_sha1_aes128cbc.der \
     -outform DER \
+    -binary \
     -recip rsa_recip.cert.pem \
     -aes-128-cbc \
     -keyopt rsa_padding_mode:oaep
@@ -298,6 +301,7 @@ openssl cms -encrypt \
     -in "$CONTENT" \
     -out ec_p256_aes256cbc.der \
     -outform DER \
+    -binary \
     -recip ec_p256_recip.cert.pem \
     -aes-256-cbc
 

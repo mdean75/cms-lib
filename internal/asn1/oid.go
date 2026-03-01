@@ -146,8 +146,12 @@ var (
 	OIDKeyWrapAES256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 45}
 )
 
-// ECDH key agreement OIDs for EnvelopedData (RFC 5753).
+// ECDH key agreement OIDs for EnvelopedData (RFC 5753 and RFC 3278).
 var (
+	// OIDKeyAgreeECDHSHA1 identifies the dhSinglePass-stdDH-sha1kdf-scheme
+	// (RFC 3278 §8.2). OpenSSL uses this OID by default for ECDH key agreement.
+	OIDKeyAgreeECDHSHA1 = asn1.ObjectIdentifier{1, 3, 133, 16, 840, 63, 0, 2}
+
 	// OIDKeyAgreeECDHSHA256 identifies the dhSinglePass-stdDH-sha256kdf-scheme.
 	OIDKeyAgreeECDHSHA256 = asn1.ObjectIdentifier{1, 3, 132, 1, 11, 1}
 

@@ -8,6 +8,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -753,15 +754,26 @@ func parseOriginatorPublicKey(originator asn1.RawValue) (*ecdh.PublicKey, error)
 		return nil, wrapError(CodeParse, "parsing OriginatorPublicKey", err)
 	}
 
-	// Determine curve from algorithm parameters OID.
-	var curveOID asn1.ObjectIdentifier
-	if _, err := asn1.Unmarshal(opk.Algorithm.Parameters.FullBytes, &curveOID); err != nil {
-		return nil, wrapError(CodeParse, "parsing EC curve OID from OriginatorPublicKey", err)
-	}
-
-	curve, err := oidToCurve(curveOID)
-	if err != nil {
-		return nil, err
+	// Determine curve from algorithm parameters OID when present; fall back to
+	// inferring from public key byte length when the parameters field is absent.
+	// OpenSSL omits the curve OID from the originator key AlgorithmIdentifier.
+	var curve ecdh.Curve
+	if len(opk.Algorithm.Parameters.FullBytes) > 0 {
+		var curveOID asn1.ObjectIdentifier
+		if _, err := asn1.Unmarshal(opk.Algorithm.Parameters.FullBytes, &curveOID); err != nil {
+			return nil, wrapError(CodeParse, "parsing EC curve OID from OriginatorPublicKey", err)
+		}
+		var err error
+		curve, err = oidToCurve(curveOID)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		curve, err = curveFromPublicKeyLen(opk.PublicKey.Bytes)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	pub, err := curve.NewPublicKey(opk.PublicKey.Bytes)
@@ -900,32 +912,50 @@ func oidToCurve(oid asn1.ObjectIdentifier) (ecdh.Curve, error) {
 	}
 }
 
-// x963KDF implements the ANS X9.63 / SP 800-56A key derivation function.
-// Z is the shared secret, keydatalen is the desired output length in bytes.
-// algID is the key-agreement AlgorithmIdentifier; its OID is used as AlgorithmID
-// in the OtherInfo structure.
+// curveFromPublicKeyLen infers the ECDH curve from the byte length of an
+// uncompressed or compressed public key point. Used when the AlgorithmIdentifier
+// parameters field is absent (e.g. OpenSSL originator keys in KARI).
+func curveFromPublicKeyLen(b []byte) (ecdh.Curve, error) {
+	switch len(b) {
+	case 65, 33: // P-256: 04+32+32 uncompressed or 02/03+32 compressed
+		return ecdh.P256(), nil
+	case 97, 49: // P-384: 04+48+48 uncompressed or 02/03+48 compressed
+		return ecdh.P384(), nil
+	case 133, 67: // P-521: 04+66+66 uncompressed or 02/03+66 compressed
+		return ecdh.P521(), nil
+	default:
+		return nil, newError(CodeUnsupportedAlgorithm,
+			fmt.Sprintf("cannot infer EC curve from public key length %d", len(b)))
+	}
+}
+
+// x963KDF implements the ANS X9.63 / SP 800-56A key derivation function per
+// RFC 5753 §7.2.2. The SharedInfo is the DER encoding of ECC-CMS-SharedInfo.
 //
-// OtherInfo = AlgorithmID || PartyUInfo || PartyVInfo || SuppPubInfo
-// AlgorithmID = key wrap OID DER bytes
-// PartyUInfo = PartyVInfo = empty (not used)
-// SuppPubInfo = 4-byte big-endian bit-length of KEK
+// Each round computes: Hash(Z || counter || DER(ECC-CMS-SharedInfo))
+// where counter is a 4-byte big-endian unsigned integer starting at 1.
 func x963KDF(z []byte, keydatalen int, algID pkix.AlgorithmIdentifier) ([]byte, error) {
-	// Extract key wrap OID from parameters; use it as AlgorithmID in OtherInfo.
 	kwOID, err := keyWrapOIDFromKEA(algID)
 	if err != nil {
 		return nil, err
 	}
-	algorithmIDBytes, err := asn1.Marshal(kwOID)
+
+	// Build ECC-CMS-SharedInfo: SEQUENCE { keyInfo AlgID, suppPubInfo [2] OCTET STRING }.
+	suppPubBytes := make([]byte, 4)
+	binary.BigEndian.PutUint32(suppPubBytes, uint32(keydatalen*8))
+	sharedInfoStruct := struct {
+		KeyInfo     pkix.AlgorithmIdentifier
+		SuppPubInfo []byte `asn1:"explicit,tag:2"`
+	}{
+		KeyInfo:     pkix.AlgorithmIdentifier{Algorithm: kwOID},
+		SuppPubInfo: suppPubBytes,
+	}
+	sharedInfo, err := asn1.Marshal(sharedInfoStruct)
 	if err != nil {
-		return nil, wrapError(CodeParse, "encoding key wrap OID for X9.63 KDF", err)
+		return nil, wrapError(CodeParse, "encoding ECC-CMS-SharedInfo for X9.63 KDF", err)
 	}
 
-	// SuppPubInfo: 4-byte big-endian encoding of keydatalen in bits.
-	suppPubInfo := make([]byte, 4)
-	binary.BigEndian.PutUint32(suppPubInfo, uint32(keydatalen*8))
-
-	// Determine hash function from key agreement OID.
-	h, hLen, err := kdfHashForKAOID(algID.Algorithm)
+	h, _, err := kdfHashForKAOID(algID.Algorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -938,13 +968,8 @@ func x963KDF(z []byte, keydatalen int, algID pkix.AlgorithmIdentifier) ([]byte, 
 		h.Reset()
 		_, _ = h.Write(z)
 		_, _ = h.Write(counterBytes)
-		_, _ = h.Write(algorithmIDBytes)
-		// PartyUInfo and PartyVInfo: each is a 4-byte zero length + empty value
-		_, _ = h.Write([]byte{0, 0, 0, 0}) // PartyUInfo length = 0
-		_, _ = h.Write([]byte{0, 0, 0, 0}) // PartyVInfo length = 0
-		_, _ = h.Write(suppPubInfo)
+		_, _ = h.Write(sharedInfo)
 		result = append(result, h.Sum(nil)...)
-		_ = hLen
 	}
 
 	return result[:keydatalen], nil
@@ -953,6 +978,8 @@ func x963KDF(z []byte, keydatalen int, algID pkix.AlgorithmIdentifier) ([]byte, 
 // kdfHashForKAOID returns the hash.Hash and output size for the given ECDH OID.
 func kdfHashForKAOID(oid asn1.ObjectIdentifier) (kdfHash, int, error) {
 	switch {
+	case oid.Equal(pkiasn1.OIDKeyAgreeECDHSHA1):
+		return sha1.New(), sha1.Size, nil //nolint:gosec // SHA-1 required for RFC 3278 interop
 	case oid.Equal(pkiasn1.OIDKeyAgreeECDHSHA256):
 		return sha256.New(), sha256.Size, nil
 	case oid.Equal(pkiasn1.OIDKeyAgreeECDHSHA384):

@@ -10,14 +10,14 @@ var fuzzParseSignedDataSink *ParsedSignedData
 
 // FuzzParseSignedData verifies that ParseSignedData never panics on arbitrary
 // input. The seeded corpus consists of the OpenSSL-generated interop fixtures
-// from testdata/, which provide structurally valid starting points for the
-// fuzzer to mutate. Seeds that cannot be read (e.g. before running
-// testdata/regen.sh) are silently skipped.
+// from testdata/openssl/signed/, which provide structurally valid starting
+// points for the fuzzer to mutate. Seeds that cannot be read (e.g. before
+// running testdata/openssl/regen.sh) are silently skipped.
 func FuzzParseSignedData(f *testing.F) {
 	for _, name := range []string{
-		"testdata/signed_attached_rsa_sha256.der",
-		"testdata/signed_detached_rsa_sha256.der",
-		"testdata/signed_attached_ec_sha256.der",
+		"testdata/openssl/signed/attached_rsa_pkcs1_sha256.der",
+		"testdata/openssl/signed/detached_rsa_pkcs1_sha256.der",
+		"testdata/openssl/signed/attached_ec_p256_sha256.der",
 	} {
 		if data, err := os.ReadFile(name); err == nil {
 			f.Add(data)

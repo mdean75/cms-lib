@@ -502,6 +502,13 @@ is sign-then-encrypt: produce a `SignedData`, then encrypt the signed blob as
 `EnvelopedData`. The recipient decrypts first, then verifies the signature. This
 provides both confidentiality and authenticity in a single envelope.
 
+**RSA-OAEP hash requirement:** `cms-lib` enforces SHA-256 for RSA-OAEP key transport
+in both encryption and decryption. OpenSSL's default is SHA-1 OAEP; messages produced
+with `openssl cms -encrypt` cannot be decrypted unless the sender adds
+`-keyopt rsa_oaep_md:sha256`. Bouncy Castle messages using explicit
+`RSAESOAEPParams` with `id-sha256` are fully compatible. See DD-007 in
+`docs/design-decisions.md` for the rationale.
+
 ---
 
 ## Summary Table
@@ -523,6 +530,6 @@ provides both confidentiality and authenticity in a single envelope.
 | ECDSA digest selection | Always SHA-256 (curve-specific code unreachable) | Auto-selects by curve (P-384→SHA-384, P-521→SHA-512); `WithHash` overrides |
 | Cert-key validation | Implicit at signing time (key-to-chain match) | Explicit at construction time (`NewSigner`) |
 | Chain embedding | Single `chain` slice; leaf discovered by key comparison | Leaf explicit in `NewSigner`; chain via `AddCertificateChain` |
-| EnvelopedData | Not implemented | RSA-OAEP key transport, ECDH key agreement, AES-GCM/CBC |
+| EnvelopedData | Not implemented | RSA-OAEP (SHA-256 only) key transport, ECDH key agreement, AES-GCM/CBC |
 | EncryptedData | Not implemented | Pre-shared key encryption, AES-GCM/CBC |
 

@@ -213,3 +213,78 @@ signer, _ := cms.NewSigner(cert, key, cms.WithHash(crypto.SHA256))
 
 Because the hash selection operates on real types (never serialized bytes), the type
 dispatch is always correct — the class of bug present in the reference cannot occur.
+
+---
+
+## DD-006 — RSA-PSS verification: salt length read from `RSASSA-PSS-params`
+
+**RFC reference:** RFC 4055 §3.1, RFC 8017 §9.1
+
+**Context:** DD-004 documents the salt length chosen during signing (`sLen = hLen`).
+This entry documents the complementary decision on the verification side.
+
+**This implementation:** `saltLenFromPSSParams(algID, h)` extracts `SaltLength` from
+the `RSASSA-PSS-params` structure embedded in `SignerInfo.SignatureAlgorithm` before
+calling `rsa.VerifyPSS`. When the params are absent or `SaltLength` is zero, it
+falls back to `hLen`.
+
+**Rationale:**
+
+RFC 4055 §3.1 specifies that `saltLength` defaults to `hLen` when the field is
+absent, but conformant implementations may choose any value ≥ 1. Real-world
+implementations diverge:
+
+| Implementation | Default `sLen` |
+|---|---|
+| OpenSSL 3.x | 20 bytes (SHA-1 output size, regardless of digest algorithm) |
+| Bouncy Castle | `hLen` |
+| This library (signing) | `hLen` |
+
+A verifier that hardcodes `sLen = hLen` will reject any PSS signature produced with
+a different salt length — including all OpenSSL-generated PSS signatures when the
+digest is SHA-256 or larger. By reading `sLen` from the embedded params, this library
+verifies PSS signatures from any conformant implementation without requiring the
+sender to use the same salt length the library would choose.
+
+**Security note:** Accepting a caller-supplied salt length does not weaken security.
+The salt is encoded in the signature itself; the verifier simply uses the declared
+value from the algorithm identifier rather than an assumed one. An attacker who could
+manipulate the algorithm identifier would also need to forge the RSA-PSS signature
+itself.
+
+---
+
+## DD-007 — RSA-OAEP key transport restricted to SHA-256
+
+**RFC reference:** RFC 3560, RFC 8017, NIST SP 800-131A Rev. 2
+
+**Scope:** `EnvelopedData` `KeyTransRecipientInfo` decryption path (`tryDecryptKTRI`)
+and encryption path (`buildRSARecipientInfo`).
+
+**This implementation:** Both encryption and decryption use SHA-256 as the OAEP hash
+algorithm. Messages that declare a different hash (e.g., SHA-1) in their
+`RSAESOAEPParams` are rejected with `ErrUnsupportedAlgorithm`.
+
+**Rationale:**
+
+SHA-1 is OpenSSL's historical default for `openssl cms -encrypt`. It is also
+deprecated:
+
+- NIST SP 800-131A Rev. 2 disallows SHA-1 for digital signatures and key derivation
+  in new applications.
+- RFC 8017 §7.1 (OAEP) recommends SHA-256 or stronger hash for new applications.
+- The OAEP hash is part of the security proof; using SHA-1 reduces the security
+  margin to approximately 80 bits.
+
+Silently accepting SHA-1 OAEP would allow decryption of messages with a deprecated
+hash algorithm without any visible signal to the caller. Enforcing SHA-256 makes the
+security boundary explicit and consistent with the library's default of PSS over
+PKCS1v15 (DD-004) and NIST-matched digest algorithms for ECDSA (DD-005).
+
+**Interoperability impact:**
+
+Messages produced by `openssl cms -encrypt` (SHA-1 OAEP by default) cannot be
+decrypted by this library. Senders must pass `-keyopt rsa_oaep_md:sha256` to
+produce compatible output. Messages produced by Bouncy Castle with explicit
+`RSAESOAEPParams` using `id-sha256` are fully compatible, as confirmed by the
+`TestInterop_BC_EnvelopedData` fixture suite.

@@ -92,6 +92,74 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 				return der
 			},
 		},
+		{
+			name: "RSA-PSS attached SHA-384",
+			sign: func(t *testing.T) []byte {
+				cert, key := generateSelfSignedRSA(t, 2048)
+				s, err := NewSigner(cert, key, WithHash(crypto.SHA384))
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
+				require.NoError(t, err)
+				return der
+			},
+		},
+		{
+			name: "RSA-PSS attached SHA-512",
+			sign: func(t *testing.T) []byte {
+				cert, key := generateSelfSignedRSA(t, 2048)
+				s, err := NewSigner(cert, key, WithHash(crypto.SHA512))
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
+				require.NoError(t, err)
+				return der
+			},
+		},
+		{
+			name:     "ECDSA P-256 detached SHA-256",
+			detached: true,
+			sign: func(t *testing.T) []byte {
+				cert, key := generateSelfSignedECDSA(t, elliptic.P256())
+				s, err := NewSigner(cert, key, WithDetachedContent())
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
+				require.NoError(t, err)
+				return der
+			},
+		},
+		{
+			name: "ECDSA P-384 attached SHA-384",
+			sign: func(t *testing.T) []byte {
+				cert, key := generateSelfSignedECDSA(t, elliptic.P384())
+				s, err := NewSigner(cert, key)
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
+				require.NoError(t, err)
+				return der
+			},
+		},
+		{
+			name:     "ECDSA P-384 detached SHA-384",
+			detached: true,
+			sign: func(t *testing.T) []byte {
+				cert, key := generateSelfSignedECDSA(t, elliptic.P384())
+				s, err := NewSigner(cert, key, WithDetachedContent())
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
+				require.NoError(t, err)
+				return der
+			},
+		},
+		{
+			name: "ECDSA P-521 attached SHA-512",
+			sign: func(t *testing.T) []byte {
+				cert, key := generateSelfSignedECDSA(t, elliptic.P521())
+				s, err := NewSigner(cert, key)
+				require.NoError(t, err)
+				der, err := s.Sign(bytes.NewReader(content))
+				require.NoError(t, err)
+				return der
+			},
+		},
 	}
 
 	for _, tt := range tests {

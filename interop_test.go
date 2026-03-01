@@ -16,7 +16,9 @@ import (
 // requires OpenSSL 3.0+, but running this test does not.
 func TestInterop_OpenSSL(t *testing.T) {
 	rsaCACert := parseFixtureCert(t, "testdata/openssl/signed/rsa_ca.cert.pem")
-	ecCACert := parseFixtureCert(t, "testdata/openssl/signed/ec_p256_ca.cert.pem")
+	ecP256CACert := parseFixtureCert(t, "testdata/openssl/signed/ec_p256_ca.cert.pem")
+	ecP384CACert := parseFixtureCert(t, "testdata/openssl/signed/ec_p384_ca.cert.pem")
+	ecP521CACert := parseFixtureCert(t, "testdata/openssl/signed/ec_p521_ca.cert.pem")
 
 	content, err := os.ReadFile("testdata/content.bin")
 	require.NoError(t, err)
@@ -39,9 +41,40 @@ func TestInterop_OpenSSL(t *testing.T) {
 			detached: true,
 		},
 		{
+			name:    "attached RSA-PSS SHA-256",
+			fixture: "testdata/openssl/signed/attached_rsa_pss_sha256.der",
+			cert:    rsaCACert,
+		},
+		{
+			name:    "attached RSA-PSS SHA-384",
+			fixture: "testdata/openssl/signed/attached_rsa_pss_sha384.der",
+			cert:    rsaCACert,
+		},
+		{
+			name:    "attached RSA-PSS SHA-512",
+			fixture: "testdata/openssl/signed/attached_rsa_pss_sha512.der",
+			cert:    rsaCACert,
+		},
+		{
 			name:    "attached ECDSA P-256 SHA-256",
 			fixture: "testdata/openssl/signed/attached_ec_p256_sha256.der",
-			cert:    ecCACert,
+			cert:    ecP256CACert,
+		},
+		{
+			name:     "detached ECDSA P-256 SHA-256",
+			fixture:  "testdata/openssl/signed/detached_ec_p256_sha256.der",
+			cert:     ecP256CACert,
+			detached: true,
+		},
+		{
+			name:    "attached ECDSA P-384 SHA-384",
+			fixture: "testdata/openssl/signed/attached_ec_p384_sha384.der",
+			cert:    ecP384CACert,
+		},
+		{
+			name:    "attached ECDSA P-521 SHA-512",
+			fixture: "testdata/openssl/signed/attached_ec_p521_sha512.der",
+			cert:    ecP521CACert,
 		},
 	}
 

@@ -3,8 +3,10 @@
 # testdata/openssl/regen.sh -- Regenerates OpenSSL interop test fixtures for cms-lib.
 #
 # Requires OpenSSL 3.0 or later. Run from any directory; the script always
-# operates relative to its own location. Private keys are deleted after the
-# fixtures are generated so that only public artifacts are committed.
+# operates relative to its own location. Signer private keys are deleted after
+# the fixtures are generated. Recipient private keys are kept — they are
+# committed to the repository so that decryption tests can run without
+# regenerating keys.
 #
 # Usage:
 #   bash testdata/openssl/regen.sh
@@ -13,7 +15,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SIGNED_DIR="$SCRIPT_DIR/signed"
+ENVELOPED_DIR="$SCRIPT_DIR/enveloped"
 CONTENT="$SCRIPT_DIR/../../testdata/content.bin"
+
+# ===========================================================================
+# SignedData fixtures
+# ===========================================================================
 
 cd "$SIGNED_DIR"
 
@@ -175,61 +182,149 @@ openssl cms -sign \
     -binary -nosmimecap -nodetach -md sha512
 
 # ---------------------------------------------------------------------------
-# Verify each fixture with OpenSSL (smoke-test the generator itself).
+# Verify each SignedData fixture with OpenSSL.
 # ---------------------------------------------------------------------------
-echo "Verifying fixtures with OpenSSL..."
+echo "Verifying SignedData fixtures with OpenSSL..."
 
-openssl cms -verify \
-    -in attached_rsa_pkcs1_sha256.der -inform DER \
-    -noverify -out /dev/null
-echo "  attached_rsa_pkcs1_sha256.der: OK"
+for f in attached_rsa_pkcs1_sha256.der attached_rsa_pss_sha256.der \
+          attached_rsa_pss_sha384.der attached_rsa_pss_sha512.der \
+          attached_ec_p256_sha256.der attached_ec_p384_sha384.der \
+          attached_ec_p521_sha512.der; do
+    openssl cms -verify -in "$f" -inform DER -noverify -out /dev/null
+    echo "  $f: OK"
+done
 
-openssl cms -verify \
-    -in detached_rsa_pkcs1_sha256.der -inform DER \
-    -noverify -binary -content "$CONTENT" -out /dev/null
-echo "  detached_rsa_pkcs1_sha256.der: OK"
-
-openssl cms -verify \
-    -in attached_rsa_pss_sha256.der -inform DER \
-    -noverify -out /dev/null
-echo "  attached_rsa_pss_sha256.der: OK"
-
-openssl cms -verify \
-    -in attached_rsa_pss_sha384.der -inform DER \
-    -noverify -out /dev/null
-echo "  attached_rsa_pss_sha384.der: OK"
-
-openssl cms -verify \
-    -in attached_rsa_pss_sha512.der -inform DER \
-    -noverify -out /dev/null
-echo "  attached_rsa_pss_sha512.der: OK"
-
-openssl cms -verify \
-    -in attached_ec_p256_sha256.der -inform DER \
-    -noverify -out /dev/null
-echo "  attached_ec_p256_sha256.der: OK"
-
-openssl cms -verify \
-    -in detached_ec_p256_sha256.der -inform DER \
-    -noverify -binary -content "$CONTENT" -out /dev/null
-echo "  detached_ec_p256_sha256.der: OK"
-
-openssl cms -verify \
-    -in attached_ec_p384_sha384.der -inform DER \
-    -noverify -out /dev/null
-echo "  attached_ec_p384_sha384.der: OK"
-
-openssl cms -verify \
-    -in attached_ec_p521_sha512.der -inform DER \
-    -noverify -out /dev/null
-echo "  attached_ec_p521_sha512.der: OK"
+for f in detached_rsa_pkcs1_sha256.der detached_ec_p256_sha256.der; do
+    openssl cms -verify -in "$f" -inform DER \
+        -noverify -binary -content "$CONTENT" -out /dev/null
+    echo "  $f: OK"
+done
 
 # ---------------------------------------------------------------------------
-# Remove private keys — not committed to the repository.
+# Remove signer private keys — not committed to the repository.
 # ---------------------------------------------------------------------------
-echo "Removing private keys..."
+echo "Removing signer private keys..."
 rm -f rsa.key.pem ec_p256.key.pem ec_p384.key.pem ec_p521.key.pem
 
 echo ""
-echo "Done. Generated fixtures:"
+echo "SignedData fixtures:"
+ls -lh ./*.der ./*.pem
+
+# ===========================================================================
+# EnvelopedData fixtures
+# ===========================================================================
+
+cd "$ENVELOPED_DIR"
+
+# ---------------------------------------------------------------------------
+# Clean up any previous run.
+# ---------------------------------------------------------------------------
+rm -f rsa_recip.key.pem rsa_recip.cert.pem
+rm -f ec_p256_recip.key.pem ec_p256_recip.cert.pem
+rm -f rsa_oaep_sha1_aes256cbc.der
+rm -f rsa_oaep_sha256_aes256cbc.der
+rm -f rsa_oaep_sha1_aes128cbc.der
+rm -f ec_p256_aes256cbc.der
+
+# ---------------------------------------------------------------------------
+# Generate recipient key pairs.
+# These keys ARE committed to the repository — they are test-only keys,
+# not secrets, and are needed for decryption tests to run without regen.
+# ---------------------------------------------------------------------------
+echo "Generating RSA 2048 recipient key and certificate..."
+openssl req -x509 \
+    -newkey rsa:2048 \
+    -keyout rsa_recip.key.pem \
+    -out rsa_recip.cert.pem \
+    -days 36500 \
+    -nodes \
+    -subj "/CN=cms-lib-test-rsa-recip"
+
+echo "Generating ECDSA P-256 recipient key and certificate..."
+openssl req -x509 \
+    -newkey ec \
+    -pkeyopt ec_paramgen_curve:P-256 \
+    -keyout ec_p256_recip.key.pem \
+    -out ec_p256_recip.cert.pem \
+    -days 36500 \
+    -nodes \
+    -subj "/CN=cms-lib-test-ec-p256-recip"
+
+# ---------------------------------------------------------------------------
+# Generate EnvelopedData fixtures — RSA-OAEP key transport.
+#
+# SHA-1 variants: OpenSSL's default OAEP hash. The library hardcodes SHA-256
+# in tryDecryptKTRI, so these fixtures are expected to fail decryption with
+# the current implementation. They document the limitation and serve as a
+# test target if the library is later updated to read the OAEP hash from
+# the AlgorithmIdentifier parameters.
+#
+# SHA-256 variant: explicit -keyopt rsa_oaep_md:sha256. This is the variant
+# the library can decrypt today and is the primary RSA interop test.
+# ---------------------------------------------------------------------------
+echo "Encrypting with RSA-OAEP SHA-1 (default) + AES-256-CBC..."
+openssl cms -encrypt \
+    -in "$CONTENT" \
+    -out rsa_oaep_sha1_aes256cbc.der \
+    -outform DER \
+    -recip rsa_recip.cert.pem \
+    -aes-256-cbc \
+    -keyopt rsa_padding_mode:oaep
+
+echo "Encrypting with RSA-OAEP SHA-256 (explicit) + AES-256-CBC..."
+openssl cms -encrypt \
+    -in "$CONTENT" \
+    -out rsa_oaep_sha256_aes256cbc.der \
+    -outform DER \
+    -recip rsa_recip.cert.pem \
+    -aes-256-cbc \
+    -keyopt rsa_padding_mode:oaep \
+    -keyopt rsa_oaep_md:sha256
+
+echo "Encrypting with RSA-OAEP SHA-1 (default) + AES-128-CBC..."
+openssl cms -encrypt \
+    -in "$CONTENT" \
+    -out rsa_oaep_sha1_aes128cbc.der \
+    -outform DER \
+    -recip rsa_recip.cert.pem \
+    -aes-128-cbc \
+    -keyopt rsa_padding_mode:oaep
+
+# ---------------------------------------------------------------------------
+# Generate EnvelopedData fixtures — ECDH key agreement.
+# ---------------------------------------------------------------------------
+echo "Encrypting with ECDH P-256 + AES-256-CBC..."
+openssl cms -encrypt \
+    -in "$CONTENT" \
+    -out ec_p256_aes256cbc.der \
+    -outform DER \
+    -recip ec_p256_recip.cert.pem \
+    -aes-256-cbc
+
+# ---------------------------------------------------------------------------
+# Smoke-test each fixture by decrypting with OpenSSL.
+# ---------------------------------------------------------------------------
+echo "Verifying EnvelopedData fixtures with OpenSSL..."
+
+for f in rsa_oaep_sha1_aes256cbc.der rsa_oaep_sha256_aes256cbc.der \
+          rsa_oaep_sha1_aes128cbc.der; do
+    openssl cms -decrypt \
+        -in "$f" -inform DER \
+        -recip rsa_recip.cert.pem \
+        -inkey rsa_recip.key.pem \
+        -out /dev/null
+    echo "  $f: OK"
+done
+
+openssl cms -decrypt \
+    -in ec_p256_aes256cbc.der -inform DER \
+    -recip ec_p256_recip.cert.pem \
+    -inkey ec_p256_recip.key.pem \
+    -out /dev/null
+echo "  ec_p256_aes256cbc.der: OK"
+
+# Recipient private keys are intentionally kept — see note above.
+
+echo ""
+echo "EnvelopedData fixtures:"
 ls -lh ./*.der ./*.pem

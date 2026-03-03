@@ -10,6 +10,7 @@ go get github.com/mdean75/cms
 
 ## Contents
 
+- [Public Types at a Glance](#public-types-at-a-glance)
 - [Signing and Verifying](#signing-and-verifying)
   - [Sign a message](#sign-a-message)
   - [Verify a signature](#verify-a-signature)
@@ -21,6 +22,58 @@ go get github.com/mdean75/cms
 - [Digest-Only Messages (DigestedData)](#digest-only-messages-digesteddata)
 - [MAC Authentication (AuthenticatedData)](#mac-authentication-authenticateddata)
 - [Error Handling](#error-handling)
+
+---
+
+## Public Types at a Glance
+
+### Builders
+
+Use these types to create CMS structures. Each follows the same pattern: construct
+with `NewXxx()`, configure with builder methods, then call the terminal method to
+produce a DER-encoded result.
+
+| Type | Terminal method | Use when you want to… |
+|---|---|---|
+| `Signer` | `Sign(r)` | Sign content with an X.509 certificate and private key (RSA, ECDSA, or Ed25519) |
+| `CounterSigner` | `CounterSign(r)` | Add a witnessed counter-signature to an existing `SignedData` without re-signing the content |
+| `Encryptor` | `Encrypt(r)` | Encrypt content for one or more recipients using their public keys (RSA-OAEP or ECDH) |
+| `SymmetricEncryptor` | `Encrypt(r)` | Encrypt content with a caller-supplied symmetric key when the key is already shared out of band |
+| `Digester` | `Digest(r)` | Wrap content with a hash digest for integrity checking only (no signature, no encryption) |
+| `Authenticator` | `Authenticate(r)` | Compute an HMAC over content and deliver the MAC key to recipients via RSA-OAEP or ECDH |
+
+### Parsed Results
+
+These types are returned by the corresponding `ParseXxx` function. Each exposes a
+`Verify` or `Decrypt` method to check the cryptographic result, and a `Content`
+method to retrieve the payload.
+
+| Type | Parse function | Verify / Decrypt |
+|---|---|---|
+| `ParsedSignedData` | `ParseSignedData(r)` | `.Verify(opts...)` / `.VerifyDetached(r, opts...)` |
+| `ParsedEnvelopedData` | `ParseEnvelopedData(r)` | `.Decrypt(key, cert)` |
+| `ParsedEncryptedData` | `ParseEncryptedData(r)` | `.Decrypt(key)` |
+| `ParsedDigestedData` | `ParseDigestedData(r)` | `.Verify()` / `.VerifyDetached(r)` |
+| `ParsedAuthenticatedData` | `ParseAuthenticatedData(r)` | `.VerifyMAC(key, cert)` |
+| `SignerInfo` | (field of `ParsedSignedData`) | Per-signer details: certificate, algorithm, signature bytes, and attributes |
+
+### Options and Enums
+
+| Type | Used with | Purpose |
+|---|---|---|
+| `SigningOption` | `NewSigner`, `NewCounterSigner` | Options valid for both builders: `WithHash`, `WithRSAPKCS1`, `WithSignerIdentifier`, `AddCertificate` |
+| `SignerOption` | `NewSigner` only | Options exclusive to `Signer`: `WithDetachedContent`, `WithContentType`, `WithTimestamp`, `WithAdditionalSigner`, `AddCRL`, and all `SigningOption` values |
+| `VerifyOption` | `ParsedSignedData.Verify` | Tune chain validation: `WithTrustRoots`, `WithSystemTrustStore`, `WithNoChainValidation`, `WithVerifyTime` |
+| `SignerIdentifierType` | `WithSignerIdentifier(...)` | `IssuerAndSerialNumber` (default) or `SubjectKeyIdentifier` |
+| `ContentEncryptionAlgorithm` | `WithContentEncryption(...)` | `AES256GCM` (default), `AES128GCM`, `AES128CBC`, `AES256CBC` |
+| `MACAlgorithm` | `WithMACAlgorithm(...)` | `HMACSHA256` (default), `HMACSHA384`, `HMACSHA512` |
+
+### Errors
+
+| Type | Purpose |
+|---|---|
+| `Error` | The library's error type. Carries a `Code`, a human-readable `Message`, and an optional `Cause`. |
+| `ErrorCode` | Enum of all error categories. Use `errors.Is(err, cms.ErrXxx)` to check for specific kinds — see [Error Handling](#error-handling) for the full sentinel list. |
 
 ---
 
@@ -311,53 +364,5 @@ _, err := cms.NewSigner().
 
 ## Development
 
-### Interop Test Fixtures
-
-The test suite verifies this library against output from OpenSSL and Bouncy Castle.
-All fixtures are pre-generated static files committed to `testdata/` — running the
-tests requires no external tools.
-
-Regenerate fixtures only when adding new test cases or updating the fixture
-generation logic.
-
-#### Bouncy Castle fixtures
-
-Two options are available. Both write to `testdata/bc/signed/` and
-`testdata/bc/enveloped/`.
-
-**Go simulator** (no external dependencies — models BC's ASN.1 encoding choices):
-
-```bash
-testdata/bc/regen.sh
-```
-
-**Actual Bouncy Castle** via Docker (produces genuine BC output; authoritative source
-of truth for BC encoding behaviour):
-
-```bash
-testdata/bc/regen-docker.sh
-```
-
-On first run, `regen-docker.sh` downloads `bcpkix-jdk18on` and `bcprov-jdk18on`
-from Maven Central (~10 MB) and caches them under
-`${XDG_CACHE_HOME:-~/.cache}/cms-lib/bc-jars`. Subsequent runs use the cache and
-are fully offline. The BC version is controlled by `BC_VERSION` at the top of
-`regen-docker.sh`.
-
-The Go simulator (`gen.go`) post-processes the library's own output to replicate BC's
-encoding quirks (explicit `NULL` digest parameters, `sha256WithRSAEncryption` OID for
-PKCS#1 v1.5, `trailerField=1` in RSA-PSS params). `CMSGenerator.groovy` produces
-these naturally because Bouncy Castle itself generates them.
-
-#### OpenSSL fixtures
-
-Requires OpenSSL 3.0 or later. Writes to `testdata/openssl/signed/` and
-`testdata/openssl/enveloped/`.
-
-```bash
-bash testdata/openssl/regen.sh
-```
-
-Signer private keys are deleted after generation and are not committed to the
-repository. Recipient private keys are kept so that decryption tests can run without
-regenerating fixtures.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for instructions on regenerating interop test
+fixtures (OpenSSL and Bouncy Castle).

@@ -1,5 +1,7 @@
 # cms
 
+[![codecov](https://codecov.io/gh/mdean75/cms-lib/branch/main/graph/badge.svg)](https://codecov.io/gh/mdean75/cms-lib)
+
 A Go implementation of [RFC 5652 Cryptographic Message Syntax (CMS)](https://www.rfc-editor.org/rfc/rfc5652).
 
 ```

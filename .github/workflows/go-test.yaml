@@ -1,0 +1,15 @@
+name: Go test coverage check
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v4
+        with:
+          go-version-file: 'go.mod'
+      - name: Generate test coverage
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic -coverpkg=./...
+      - name: Check test coverage
+        uses: vladopajic/go-test-coverage@v2
+

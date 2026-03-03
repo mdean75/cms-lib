@@ -203,16 +203,24 @@ func (s *Signer) signContent(content []byte, contentType asn1.ObjectIdentifier) 
 		return pkiasn1.SignerInfo{}, 0, err
 	}
 
-	// Compute digest over re-encoded signedAttrs (SET tag, not IMPLICIT [0]).
-	h2, err := newHash(effectiveHash)
-	if err != nil {
-		return pkiasn1.SignerInfo{}, 0, err
+	// Compute the input to the signature operation. For Ed25519 the signature
+	// is computed over the raw signedAttrs bytes per RFC 8419 § 3.3 — Ed25519
+	// performs its own internal hashing and must not receive a pre-hashed value.
+	// For all other algorithms, hash the signedAttrs first.
+	var sigInput []byte
+	if family == familyEd25519 {
+		sigInput = signedAttrsBytes
+	} else {
+		h2, err := newHash(effectiveHash)
+		if err != nil {
+			return pkiasn1.SignerInfo{}, 0, err
+		}
+		h2.Write(signedAttrsBytes)
+		sigInput = h2.Sum(nil)
 	}
-	h2.Write(signedAttrsBytes)
-	signedAttrsDigest := h2.Sum(nil)
 
-	// Sign the digest.
-	sig, err := s.sign(signedAttrsDigest, effectiveHash, family)
+	// Sign.
+	sig, err := s.sign(sigInput, effectiveHash, family)
 	if err != nil {
 		return pkiasn1.SignerInfo{}, 0, err
 	}
@@ -985,15 +993,22 @@ func (p *ParsedSignedData) verifySigner(si pkiasn1.SignerInfo, content []byte, c
 			return err
 		}
 
-		// Step 3: Verify signature over DER-encoded signedAttrs (SET form).
-		h3, err := newHash(digestHash)
-		if err != nil {
-			return err
+		// Step 3: Verify signature. For Ed25519 the signature is over the raw
+		// signedAttrs bytes per RFC 8419 § 3.3. For all other algorithms,
+		// verify against the hash of signedAttrs.
+		var sigInput []byte
+		if si.SignatureAlgorithm.Algorithm.Equal(pkiasn1.OIDSignatureAlgorithmEd25519) {
+			sigInput = setBytes
+		} else {
+			h3, err := newHash(digestHash)
+			if err != nil {
+				return err
+			}
+			h3.Write(setBytes)
+			sigInput = h3.Sum(nil)
 		}
-		h3.Write(setBytes)
-		signedAttrsDigest := h3.Sum(nil)
 
-		if err := verifySignature(cert, si, signedAttrsDigest, digestHash); err != nil {
+		if err := verifySignature(cert, si, sigInput, digestHash); err != nil {
 			return err
 		}
 	} else {

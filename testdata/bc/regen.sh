@@ -10,9 +10,9 @@
 #   - RSA PKCS1v15 signatureAlgorithm uses sha256WithRSAEncryption OID
 #   - RSA-PSS RSASSA-PSS-params include trailerField=1 explicitly
 #
-# If you have Bouncy Castle / Groovy available and wish to regenerate from
-# actual BC output, run CMSGenerator.groovy instead:
-#   groovy testdata/bc/CMSGenerator.groovy
+# If you wish to regenerate from actual BC output, run:
+#   testdata/bc/regen-docker.sh
+# (requires Docker; downloads BC JARs on first run and caches them locally)
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 go run testdata/bc/gen.go

@@ -148,8 +148,10 @@ func opensslVersionAtLeast(t *testing.T, opensslPath string, major, minor, patch
 		return false
 	}
 	// Expected format: "OpenSSL X.Y.Z ..."
+	// LibreSSL uses independent version numbers and does not support all features
+	// (e.g. AES-GCM CMS decrypt) that the equivalent OpenSSL release does.
 	fields := strings.Fields(string(out))
-	if len(fields) < 2 {
+	if len(fields) < 2 || fields[0] != "OpenSSL" {
 		return false
 	}
 	parts := strings.SplitN(fields[1], ".", 3)

@@ -1,6 +1,7 @@
 package cms
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
@@ -18,6 +19,7 @@ import (
 	"fmt"
 	"hash"
 	"io"
+	"github.com/mdean75/cms-lib/ber"
 	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
@@ -191,15 +193,24 @@ type ParsedEnvelopedData struct {
 	envelopedData pkiasn1.EnvelopedData
 }
 
-// ParseEnvelopedData parses a DER-encoded CMS ContentInfo wrapping EnvelopedData.
+// ParseEnvelopedData parses a BER- or DER-encoded CMS ContentInfo wrapping
+// EnvelopedData. RFC 5652 permits BER encoding; the input is normalized to
+// DER before parsing.
 func ParseEnvelopedData(r io.Reader) (*ParsedEnvelopedData, error) {
 	input, err := io.ReadAll(r)
 	if err != nil {
 		return nil, wrapError(CodeParse, "reading EnvelopedData input", err)
 	}
 
+	// Normalize BER to DER so we can handle real-world encodings from
+	// implementations such as Bouncy Castle that use indefinite-length BER.
+	derBytes, err := ber.Normalize(bytes.NewReader(input))
+	if err != nil {
+		return nil, wrapError(CodeBERConversion, "BER to DER normalization failed", err)
+	}
+
 	var ci pkiasn1.ContentInfo
-	rest, err := asn1.Unmarshal(input, &ci)
+	rest, err := asn1.Unmarshal(derBytes, &ci)
 	if err != nil {
 		return nil, wrapError(CodeParse, "parsing ContentInfo", err)
 	}
@@ -487,9 +498,35 @@ func encryptAESCBC(plaintext []byte, keyLen int) (cek, ciphertext []byte, algID 
 	return cek, ciphertext, algID, nil
 }
 
+// extractCiphertext returns the raw ciphertext bytes from the EncryptedContent
+// RawValue. In DER the [0] IMPLICIT OCTET STRING is primitive and Bytes is the
+// ciphertext directly. In BER it may be a constructed [0] containing one or more
+// primitive OCTET STRING chunks; after ber.Normalize the indefinite length is
+// resolved but the constructed form remains, so we concatenate the inner chunks.
+func extractCiphertext(rv asn1.RawValue) ([]byte, error) {
+	if !rv.IsCompound {
+		return rv.Bytes, nil
+	}
+	var ciphertext []byte
+	rest := rv.Bytes
+	for len(rest) > 0 {
+		var chunk []byte
+		var err error
+		rest, err = asn1.Unmarshal(rest, &chunk)
+		if err != nil {
+			return nil, wrapError(CodeParse, "extracting ciphertext chunk from BER-constructed [0] encoding", err)
+		}
+		ciphertext = append(ciphertext, chunk...)
+	}
+	return ciphertext, nil
+}
+
 // decryptContent decrypts the ciphertext in eci using cek.
 func decryptContent(eci pkiasn1.EncryptedContentInfo, cek []byte) ([]byte, error) {
-	ciphertext := eci.EncryptedContent.Bytes
+	ciphertext, err := extractCiphertext(eci.EncryptedContent)
+	if err != nil {
+		return nil, err
+	}
 	algOID := eci.ContentEncryptionAlgorithm.Algorithm
 
 	switch {

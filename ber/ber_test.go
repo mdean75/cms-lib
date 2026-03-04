@@ -254,7 +254,9 @@ func TestNormalize_ZeroBytePayloadDistinction(t *testing.T) {
 		0xA0, 0x02, // [0] EXPLICIT, length 2
 		0x04, 0x00, // OCTET STRING, length 0
 	}
-	assert.Equal(t, wantDER, got, "zero-byte payload must be preserved as present; must not be treated as absent (detached signature)")
+	msg := "zero-byte payload must be preserved as present; " +
+		"must not be treated as absent (detached signature)"
+	assert.Equal(t, wantDER, got, msg)
 
 	// Confirm the result is distinct from an absent field (nil/empty output).
 	assert.NotEmpty(t, got, "normalized output must not be empty for a 0-byte payload")

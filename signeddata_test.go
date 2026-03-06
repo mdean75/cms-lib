@@ -51,7 +51,9 @@ func generateSelfSignedEd25519(t *testing.T) (*x509.Certificate, ed25519.Private
 }
 
 // selfSigned creates a minimal self-signed certificate.
-func selfSigned(t *testing.T, pub crypto.PublicKey, signer crypto.Signer, subject pkix.Name) *x509.Certificate {
+func selfSigned(
+	t *testing.T, pub crypto.PublicKey, signer crypto.Signer, subject pkix.Name, //nolint:gocritic // test helper
+) *x509.Certificate {
 	t.Helper()
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	require.NoError(t, err)
@@ -1114,7 +1116,7 @@ func TestVerify_WrongTimestampToken(t *testing.T) {
 	sd.SignerInfos[0].UnsignedAttrs = psdB.signedData.SignerInfos[0].UnsignedAttrs
 
 	// Re-marshal and re-parse.
-	ciDER, err := marshalContentInfo(sd)
+	ciDER, err := marshalContentInfo(&sd)
 	require.NoError(t, err)
 	parsed, err := ParseSignedData(bytes.NewReader(ciDER))
 	require.NoError(t, err)

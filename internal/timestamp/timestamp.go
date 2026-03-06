@@ -9,6 +9,7 @@ import (
 	"crypto"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -80,15 +81,27 @@ type Accuracy struct {
 	Micros  int `asn1:"optional,tag:2"`
 }
 
+// Static sentinel errors. Dynamic errors wrap these with fmt.Errorf so callers
+// can use errors.Is for category matching while the error string retains the
+// specific value (status code, OID, etc.) for diagnostics.
+var (
+	errNonOKHTTPStatus    = errors.New("non-OK HTTP status")
+	errTSARejected        = errors.New("TSA request rejected")
+	errTSANoToken         = errors.New("TSA response contains no timestamp token")
+	errWrongContentType   = errors.New("eContentType must be id-ct-TSTInfo")
+	errImprintMismatch    = errors.New("timestamp message imprint does not match signature bytes")
+	errUnsupportedHashAlg = errors.New("unsupported hash algorithm")
+)
+
 // Request sends an RFC 3161 timestamp request to tsaURL. algID is the hash
 // algorithm identifier and digest is the pre-computed hash of the data to
 // timestamp. It returns the raw DER timestamp token (ContentInfo wrapping
 // SignedData with eContentType id-ct-TSTInfo).
-func Request(tsaURL string, algID pkix.AlgorithmIdentifier, digest []byte) ([]byte, error) {
+func Request(tsaURL string, algID *pkix.AlgorithmIdentifier, digest []byte) ([]byte, error) {
 	req := TimeStampReq{
 		Version: 1,
 		MessageImprint: MessageImprint{
-			HashAlgorithm: algID,
+			HashAlgorithm: *algID,
 			HashedMessage: digest,
 		},
 		CertReq: true,
@@ -99,14 +112,15 @@ func Request(tsaURL string, algID pkix.AlgorithmIdentifier, digest []byte) ([]by
 		return nil, fmt.Errorf("marshal timestamp request: %w", err)
 	}
 
-	resp, err := http.Post(tsaURL, "application/timestamp-query", bytes.NewReader(reqDER)) //nolint:noctx
+	reqReader := bytes.NewReader(reqDER)
+	resp, err := http.Post(tsaURL, "application/timestamp-query", reqReader) //nolint:noctx,gosec // TSA endpoint
 	if err != nil {
 		return nil, fmt.Errorf("timestamp request to %s: %w", tsaURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("TSA returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("TSA returned HTTP %d: %w", resp.StatusCode, errNonOKHTTPStatus)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -120,11 +134,11 @@ func Request(tsaURL string, algID pkix.AlgorithmIdentifier, digest []byte) ([]by
 	}
 
 	if tsResp.Status.Status != statusGranted && tsResp.Status.Status != statusGrantedWithMods {
-		return nil, fmt.Errorf("TSA rejected request with status %d", tsResp.Status.Status)
+		return nil, fmt.Errorf("TSA PKI status %d: %w", tsResp.Status.Status, errTSARejected)
 	}
 
 	if len(tsResp.TimeStampToken.FullBytes) == 0 {
-		return nil, fmt.Errorf("TSA response contains no timestamp token")
+		return nil, errTSANoToken
 	}
 
 	return tsResp.TimeStampToken.FullBytes, nil
@@ -147,8 +161,8 @@ func ParseTSTInfo(tokenDER []byte) (*TSTInfo, error) {
 	}
 
 	if !sd.EncapContentInfo.EContentType.Equal(pkiasn1.OIDTSTInfo) {
-		return nil, fmt.Errorf("timestamp token eContentType is not id-ct-TSTInfo: %s",
-			sd.EncapContentInfo.EContentType)
+		return nil, fmt.Errorf("timestamp token eContentType %s: %w",
+			sd.EncapContentInfo.EContentType, errWrongContentType)
 	}
 
 	// EContent.Bytes = inner bytes of [0] EXPLICIT = OCTET STRING { TSTInfo DER }.
@@ -184,7 +198,7 @@ func VerifyHash(tokenDER, sigBytes []byte) error {
 	computed := hw.Sum(nil)
 
 	if !bytes.Equal(computed, tst.MessageImprint.HashedMessage) {
-		return fmt.Errorf("timestamp message imprint does not match signature bytes")
+		return errImprintMismatch
 	}
 
 	return nil
@@ -207,6 +221,6 @@ func hashForAlgorithm(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 	case oid.Equal(pkiasn1.OIDDigestAlgorithmSHA3_512):
 		return crypto.SHA3_512, nil
 	default:
-		return 0, fmt.Errorf("unsupported hash algorithm in timestamp token: %s", oid)
+		return 0, fmt.Errorf("timestamp token hash OID %s: %w", oid, errUnsupportedHashAlg)
 	}
 }

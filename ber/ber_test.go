@@ -262,6 +262,52 @@ func TestNormalize_ZeroBytePayloadDistinction(t *testing.T) {
 	assert.NotEmpty(t, got, "normalized output must not be empty for a 0-byte payload")
 }
 
+// TestWriteTLV verifies that writeTLV emits the correct minimal DER length
+// encoding for each range of content length. The four ranges map to the four
+// long-form constants: short-form (0–127), lenLongForm1Octet (128–255),
+// lenLongForm2Octets (256–65535), lenLongForm3Octets (65536–16777215), and lenLongForm4Octets
+// (16777216+). The lenLongForm4Octets case was added to close a correctness gap
+// against DefaultMaxAttachedSize (64 MiB), which exceeds the previous 3-byte
+// ceiling of ~16 MB.
+func TestWriteTLV(t *testing.T) {
+	tests := []struct {
+		name   string
+		length int
+		want   []byte // expected length-field bytes only (tag omitted for clarity)
+	}{
+		// Short-form: single byte, value == length.
+		{"short-form zero", 0, []byte{0x00}},
+		{"short-form max", 127, []byte{0x7F}},
+		// lenLongForm1Octet: 0x81 followed by 1 byte.
+		{"long-form 1 min", 128, []byte{0x81, 0x80}},
+		{"long-form 1 max", 255, []byte{0x81, 0xFF}},
+		// lenLongForm2Octets: 0x82 followed by 2 bytes, big-endian.
+		{"long-form 2 min", 256, []byte{0x82, 0x01, 0x00}},
+		{"long-form 2 max", 65535, []byte{0x82, 0xFF, 0xFF}},
+		// lenLongForm3Octets: 0x83 followed by 3 bytes, big-endian.
+		{"long-form 3 min", 65536, []byte{0x83, 0x01, 0x00, 0x00}},
+		{"long-form 3 max", 16777215, []byte{0x83, 0xFF, 0xFF, 0xFF}},
+		// lenLongForm4Octets: 0x84 followed by 4 bytes, big-endian.
+		// This range covers content lengths > ~16 MB up to ~4 GB, which includes
+		// the library's DefaultMaxAttachedSize of 64 MiB (67108864 bytes).
+		{"long-form 4 min", 16777216, []byte{0x84, 0x01, 0x00, 0x00, 0x00}},
+		{"long-form 4 64MiB", 67108864, []byte{0x84, 0x04, 0x00, 0x00, 0x00}},
+		{"long-form 4 max", 4294967295, []byte{0x84, 0xFF, 0xFF, 0xFF, 0xFF}},
+	}
+
+	// Use a single-byte placeholder tag so we can verify just the length field.
+	tag := []byte{0x04} // OCTET STRING
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			writeTLV(&buf, tag, tt.length)
+			got := buf.Bytes()
+			// Strip the tag byte; compare only the encoded length field.
+			require.Equal(t, tt.want, got[1:])
+		})
+	}
+}
+
 var benchResult []byte
 
 func BenchmarkNormalize(b *testing.B) {

@@ -28,7 +28,7 @@ const (
 
 // allowedHashes is the set of digest algorithms accepted by this library.
 // SHA-1, MD5, and all other deprecated algorithms are excluded.
-var allowedHashes = map[crypto.Hash]bool{
+var allowedHashes = map[crypto.Hash]bool{ //nolint:exhaustive // security allowlist: only approved algorithms included
 	crypto.SHA256:     true,
 	crypto.SHA384:     true,
 	crypto.SHA512:     true,
@@ -39,7 +39,7 @@ var allowedHashes = map[crypto.Hash]bool{
 
 // hashToOID maps a crypto.Hash to its digest algorithm OID.
 // Only hashes in allowedHashes are mapped.
-var hashToOID = map[crypto.Hash]asn1.ObjectIdentifier{
+var hashToOID = map[crypto.Hash]asn1.ObjectIdentifier{ //nolint:exhaustive // security allowlist: approved hashes only
 	crypto.SHA256:   pkiasn1.OIDDigestAlgorithmSHA256,
 	crypto.SHA384:   pkiasn1.OIDDigestAlgorithmSHA384,
 	crypto.SHA512:   pkiasn1.OIDDigestAlgorithmSHA512,
@@ -206,7 +206,7 @@ func mgf1AlgID(hashOID asn1.ObjectIdentifier) pkix.AlgorithmIdentifier {
 // SaltLength sub-field is zero (the RFC 4055 default of 20), the function
 // falls back to saltLengthForHash so that our generated signatures remain
 // verifiable against well-formed params.
-func saltLenFromPSSParams(algID pkix.AlgorithmIdentifier, h crypto.Hash) (int, error) {
+func saltLenFromPSSParams(algID *pkix.AlgorithmIdentifier, h crypto.Hash) (int, error) {
 	if len(algID.Parameters.FullBytes) == 0 {
 		return saltLengthForHash(h)
 	}

@@ -178,7 +178,7 @@ func (a *Authenticator) Authenticate(r io.Reader) ([]byte, error) {
 		MAC:       mac,
 	}
 
-	return marshalAuthenticatedDataCI(ad)
+	return marshalAuthenticatedDataCI(&ad)
 }
 
 // validate checks that all accumulated configuration errors are nil and that
@@ -501,8 +501,8 @@ func retagAsImplicit2(setBytes []byte) []byte {
 
 // marshalAuthenticatedDataCI wraps AuthenticatedData in a ContentInfo and
 // returns DER bytes.
-func marshalAuthenticatedDataCI(ad pkiasn1.AuthenticatedData) ([]byte, error) {
-	adBytes, err := asn1.Marshal(ad)
+func marshalAuthenticatedDataCI(ad *pkiasn1.AuthenticatedData) ([]byte, error) {
+	adBytes, err := asn1.Marshal(*ad)
 	if err != nil {
 		return nil, wrapError(CodeParse, "marshaling AuthenticatedData", err)
 	}

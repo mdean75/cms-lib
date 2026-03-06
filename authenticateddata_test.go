@@ -167,7 +167,7 @@ func TestAuthenticate_TamperedContent(t *testing.T) {
 	require.NoError(t, err)
 	parsed.authenticatedData.EncapContentInfo = eci
 
-	reencoded, err := marshalAuthenticatedDataCI(parsed.authenticatedData)
+	reencoded, err := marshalAuthenticatedDataCI(&parsed.authenticatedData)
 	require.NoError(t, err)
 
 	reparsed, err := ParseAuthenticatedData(FromBytes(reencoded))

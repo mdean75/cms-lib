@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -121,36 +122,11 @@ func (s *Signer) Sign(r io.Reader) ([]byte, error) {
 		allCerts = append(allCerts, as.extraCerts...)
 	}
 
-	// If a TSA URL is configured, fetch a timestamp token for each SignerInfo
-	// and embed it as an unsigned id-aa-signatureTimeStampToken attribute.
-	if s.tsaURL != "" {
-		for i := range allSIs {
-			algID, algErr := digestAlgID(allHashes[i])
-			if algErr != nil {
-				return nil, algErr
-			}
-			// Hash the Signature bytes to form the MessageImprint.
-			h, hashErr := newHash(allHashes[i])
-			if hashErr != nil {
-				return nil, hashErr
-			}
-			h.Write(allSIs[i].Signature)
-
-			token, tsErr := timestamp.Request(s.tsaURL, algID, h.Sum(nil))
-			if tsErr != nil {
-				return nil, wrapError(CodeTimestamp, "fetching RFC 3161 timestamp", tsErr)
-			}
-
-			merged, mergeErr := mergeUnsignedAttr(
-				allSIs[i].UnsignedAttrs,
-				pkiasn1.OIDAttributeTimeStampToken,
-				token,
-			)
-			if mergeErr != nil {
-				return nil, mergeErr
-			}
-			allSIs[i].UnsignedAttrs = merged
-		}
+	// If a TSA URL is configured, embed a timestamp token in each SignerInfo.
+	var tsErr error
+	allSIs, tsErr = s.attachTimestamps(allSIs, allHashes)
+	if tsErr != nil {
+		return nil, tsErr
 	}
 
 	// Build EncapsulatedContentInfo.
@@ -160,18 +136,50 @@ func (s *Signer) Sign(r io.Reader) ([]byte, error) {
 	}
 
 	// Assemble SignedData.
-	sd, err := s.buildSignedDataMulti(eci, allSIs, allHashes, allCerts)
+	sd, err := s.buildSignedDataMulti(&eci, allSIs, allHashes, allCerts)
 	if err != nil {
 		return nil, err
 	}
 
-	return marshalContentInfo(sd)
+	return marshalContentInfo(&sd)
+}
+
+// attachTimestamps fetches an RFC 3161 timestamp for each SignerInfo and
+// embeds it as an unsigned id-aa-signatureTimeStampToken attribute. It is a
+// no-op when the TSA URL is empty.
+func (s *Signer) attachTimestamps(sis []pkiasn1.SignerInfo, hashes []crypto.Hash) ([]pkiasn1.SignerInfo, error) {
+	if s.tsaURL == "" {
+		return sis, nil
+	}
+	for i := range sis {
+		algID, err := digestAlgID(hashes[i])
+		if err != nil {
+			return nil, err
+		}
+		h, err := newHash(hashes[i])
+		if err != nil {
+			return nil, err
+		}
+		h.Write(sis[i].Signature)
+		token, err := timestamp.Request(s.tsaURL, &algID, h.Sum(nil))
+		if err != nil {
+			return nil, wrapError(CodeTimestamp, "fetching RFC 3161 timestamp", err)
+		}
+		merged, err := mergeUnsignedAttr(sis[i].UnsignedAttrs, pkiasn1.OIDAttributeTimeStampToken, token)
+		if err != nil {
+			return nil, err
+		}
+		sis[i].UnsignedAttrs = merged
+	}
+	return sis, nil
 }
 
 // signContent computes a SignerInfo for this signer over the given content bytes.
 // contentType is passed explicitly so additional signers use the primary signer's
 // eContentType in their signed attributes.
-func (s *Signer) signContent(content []byte, contentType asn1.ObjectIdentifier) (pkiasn1.SignerInfo, crypto.Hash, error) {
+func (s *Signer) signContent(
+	content []byte, contentType asn1.ObjectIdentifier,
+) (pkiasn1.SignerInfo, crypto.Hash, error) {
 	effectiveHash := hashForKey(s.key, s.hash, s.hashExplicit)
 
 	family := s.family
@@ -256,7 +264,8 @@ func (s *Signer) readContent(r io.Reader) ([]byte, error) {
 	}
 	if int64(len(buf)) > s.maxSize {
 		return nil, newError(CodePayloadTooLarge,
-			fmt.Sprintf("attached content exceeds limit of %d bytes; use WithDetachedContent or increase limit with WithMaxAttachedContentSize", s.maxSize))
+			fmt.Sprintf("attached content exceeds limit of %d bytes; "+
+				"use WithDetachedContent or increase limit with WithMaxAttachedContentSize", s.maxSize))
 	}
 	return buf, nil
 }
@@ -264,7 +273,9 @@ func (s *Signer) readContent(r io.Reader) ([]byte, error) {
 // buildSignedAttrsForType constructs the mandatory signed attributes plus any
 // custom attributes added by the caller. contentType is passed explicitly so
 // that additional signers can use the primary signer's eContentType.
-func (s *Signer) buildSignedAttrsForType(digest []byte, contentType asn1.ObjectIdentifier) ([]pkiasn1.Attribute, error) {
+func (s *Signer) buildSignedAttrsForType(
+	digest []byte, contentType asn1.ObjectIdentifier,
+) ([]pkiasn1.Attribute, error) {
 	// Mandatory: content-type
 	ctVal, err := asn1.Marshal(contentType)
 	if err != nil {
@@ -362,7 +373,9 @@ func (s *Signer) sign(digest []byte, h crypto.Hash, family signatureFamily) ([]b
 }
 
 // buildSignerInfo assembles the SignerInfo structure.
-func (s *Signer) buildSignerInfo(h crypto.Hash, family signatureFamily, signedAttrsBytes, sig []byte) (pkiasn1.SignerInfo, error) {
+func (s *Signer) buildSignerInfo(
+	h crypto.Hash, family signatureFamily, signedAttrsBytes, sig []byte,
+) (pkiasn1.SignerInfo, error) {
 	digestAlg, err := digestAlgID(h)
 	if err != nil {
 		return pkiasn1.SignerInfo{}, err
@@ -482,7 +495,10 @@ func (s *Signer) buildECI(content []byte) (pkiasn1.EncapsulatedContentInfo, erro
 
 // buildSignedDataMulti assembles the full SignedData structure from multiple
 // signers' SignerInfos, deduplicating the DigestAlgorithms SET.
-func (s *Signer) buildSignedDataMulti(eci pkiasn1.EncapsulatedContentInfo, sis []pkiasn1.SignerInfo, hashes []crypto.Hash, certs []*x509.Certificate) (pkiasn1.SignedData, error) {
+func (s *Signer) buildSignedDataMulti(
+	eci *pkiasn1.EncapsulatedContentInfo, sis []pkiasn1.SignerInfo,
+	hashes []crypto.Hash, certs []*x509.Certificate,
+) (pkiasn1.SignedData, error) {
 	digestAlgs, err := deduplicateDigestAlgs(hashes)
 	if err != nil {
 		return pkiasn1.SignedData{}, err
@@ -490,8 +506,8 @@ func (s *Signer) buildSignedDataMulti(eci pkiasn1.EncapsulatedContentInfo, sis [
 
 	// Use the highest required SignedData version across all SignerInfos.
 	version := 1
-	for _, si := range sis {
-		if v := computeSignedDataVersion(eci.EContentType, si.Version); v > version {
+	for i := range sis {
+		if v := computeSignedDataVersion(eci.EContentType, sis[i].Version); v > version {
 			version = v
 		}
 	}
@@ -499,7 +515,7 @@ func (s *Signer) buildSignedDataMulti(eci pkiasn1.EncapsulatedContentInfo, sis [
 	sd := pkiasn1.SignedData{
 		Version:          version,
 		DigestAlgorithms: digestAlgs,
-		EncapContentInfo: eci,
+		EncapContentInfo: *eci,
 		SignerInfos:      sis,
 	}
 
@@ -578,8 +594,8 @@ func computeSignedDataVersion(eContentType asn1.ObjectIdentifier, signerInfoVers
 // RawValue.FullBytes is set — it writes FullBytes verbatim. We therefore pre-build
 // the [0] EXPLICIT wrapper around sdBytes before assigning to FullBytes. This ensures
 // the wire form is SEQUENCE { OID, [0] EXPLICIT { SEQUENCE { ...SignedData... } } }.
-func marshalContentInfo(sd pkiasn1.SignedData) ([]byte, error) {
-	sdBytes, err := asn1.Marshal(sd)
+func marshalContentInfo(sd *pkiasn1.SignedData) ([]byte, error) {
+	sdBytes, err := asn1.Marshal(*sd)
 	if err != nil {
 		return nil, wrapError(CodeParse, "marshal SignedData", err)
 	}
@@ -672,7 +688,7 @@ func WithTrustRoots(pool *x509.CertPool) VerifyOption {
 
 // WithVerifyOptions provides full control over x509 verification parameters.
 // This overrides any roots or time set by other options.
-func WithVerifyOptions(opts x509.VerifyOptions) VerifyOption {
+func WithVerifyOptions(opts x509.VerifyOptions) VerifyOption { //nolint:gocritic // exported API
 	return func(c *verifyConfig) {
 		c.verifyOpts = &opts
 	}
@@ -875,7 +891,8 @@ func (p *ParsedSignedData) CRLs() []*x509.RevocationList {
 // Verify or VerifyDetached via WithTrustRoots.
 func (p *ParsedSignedData) Signers() []SignerInfo {
 	result := make([]SignerInfo, len(p.signedData.SignerInfos))
-	for i, si := range p.signedData.SignerInfos {
+	for i := range p.signedData.SignerInfos {
+		si := &p.signedData.SignerInfos[i]
 		result[i] = SignerInfo{
 			Version:            si.Version,
 			Certificate:        p.findSignerCertOrNil(si),
@@ -885,18 +902,6 @@ func (p *ParsedSignedData) Signers() []SignerInfo {
 		}
 	}
 	return result
-}
-
-// findSignerCertOrNil attempts to locate the signing certificate for si from
-// the embedded certificates. Returns nil without error when the certificate is
-// absent or the SID cannot be parsed — callers holding the cert out of band
-// should call findSignerCert (which returns errors) during verification.
-func (p *ParsedSignedData) findSignerCertOrNil(si pkiasn1.SignerInfo) *x509.Certificate {
-	cert, err := findSignerCert(p.certs, si)
-	if err != nil {
-		return nil
-	}
-	return cert
 }
 
 // Verify verifies all SignerInfos in an attached-content SignedData.
@@ -931,6 +936,18 @@ func (p *ParsedSignedData) VerifyDetached(content io.Reader, opts ...VerifyOptio
 	return p.verifyWithContent(contentBytes, opts...)
 }
 
+// findSignerCertOrNil attempts to locate the signing certificate for si from
+// the embedded certificates. Returns nil without error when the certificate is
+// absent or the SID cannot be parsed — callers holding the cert out of band
+// should call findSignerCert (which returns errors) during verification.
+func (p *ParsedSignedData) findSignerCertOrNil(si *pkiasn1.SignerInfo) *x509.Certificate {
+	cert, err := findSignerCert(p.certs, si)
+	if err != nil {
+		return nil
+	}
+	return cert
+}
+
 // verifyWithContent verifies all SignerInfos against the given content bytes.
 func (p *ParsedSignedData) verifyWithContent(content []byte, opts ...VerifyOption) error {
 	cfg := &verifyConfig{}
@@ -941,18 +958,37 @@ func (p *ParsedSignedData) verifyWithContent(content []byte, opts ...VerifyOptio
 		cfg.verifyTime = time.Now()
 	}
 
-	for i, si := range p.signedData.SignerInfos {
-		if err := p.verifySigner(si, content, cfg); err != nil {
-			return wrapError(err.(*Error).Code,
-				fmt.Sprintf("SignerInfo[%d]: %s", i, err.(*Error).Message),
-				err.(*Error).Cause)
+	for i := range p.signedData.SignerInfos {
+		if err := p.verifySigner(&p.signedData.SignerInfos[i], content, cfg); err != nil {
+			var cmsErr *Error
+			if errors.As(err, &cmsErr) {
+				return wrapError(cmsErr.Code,
+					fmt.Sprintf("SignerInfo[%d]: %s", i, cmsErr.Message),
+					cmsErr.Cause)
+			}
+			return err
 		}
 	}
 	return nil
 }
 
+// computeSigInput returns the bytes passed to the signature verifier.
+// For Ed25519 the input is the raw signedAttrs SET per RFC 8419 §3.3.
+// For all other algorithms it is the digest of the signedAttrs SET.
+func computeSigInput(si *pkiasn1.SignerInfo, digestHash crypto.Hash, setBytes []byte) ([]byte, error) {
+	if si.SignatureAlgorithm.Algorithm.Equal(pkiasn1.OIDSignatureAlgorithmEd25519) {
+		return setBytes, nil
+	}
+	h, err := newHash(digestHash)
+	if err != nil {
+		return nil, err
+	}
+	h.Write(setBytes)
+	return h.Sum(nil), nil
+}
+
 // verifySigner verifies a single SignerInfo against the content.
-func (p *ParsedSignedData) verifySigner(si pkiasn1.SignerInfo, content []byte, cfg *verifyConfig) error {
+func (p *ParsedSignedData) verifySigner(si *pkiasn1.SignerInfo, content []byte, cfg *verifyConfig) error {
 	// Merge embedded and external certificates for lookup.
 	allCerts := p.certs
 	if len(cfg.externalCerts) > 0 {
@@ -984,61 +1020,57 @@ func (p *ParsedSignedData) verifySigner(si pkiasn1.SignerInfo, content []byte, c
 	computedDigest := h.Sum(nil)
 
 	if signedAttrsPresent {
-		// Step 2: Validate signed attributes.
-		signedAttrsBytes := si.SignedAttrs.FullBytes
-		// The wire form uses IMPLICIT [0]; re-tag as SET for attribute parsing.
-		setBytes := retagAsSet(signedAttrsBytes)
-
-		if err := validateSignedAttrs(setBytes, computedDigest, p.signedData.EncapContentInfo.EContentType); err != nil {
-			return err
-		}
-
-		// Step 3: Verify signature. For Ed25519 the signature is over the raw
-		// signedAttrs bytes per RFC 8419 § 3.3. For all other algorithms,
-		// verify against the hash of signedAttrs.
-		var sigInput []byte
-		if si.SignatureAlgorithm.Algorithm.Equal(pkiasn1.OIDSignatureAlgorithmEd25519) {
-			sigInput = setBytes
-		} else {
-			h3, err := newHash(digestHash)
-			if err != nil {
-				return err
-			}
-			h3.Write(setBytes)
-			sigInput = h3.Sum(nil)
-		}
-
-		if err := verifySignature(cert, si, sigInput, digestHash); err != nil {
+		if err := p.verifySignedAttrsPath(si, cert, computedDigest, digestHash); err != nil {
 			return err
 		}
 	} else {
-		// No signed attributes: verify signature directly over content digest.
 		if err := verifySignature(cert, si, computedDigest, digestHash); err != nil {
 			return err
 		}
 	}
 
-	// Step 4: Chain validation (unless disabled).
+	return p.verifyChainAndTimestamps(si, cert, allCerts, cfg)
+}
+
+// verifySignedAttrsPath validates the signed attributes and verifies the signature
+// when signed attributes are present in the SignerInfo.
+func (p *ParsedSignedData) verifySignedAttrsPath(
+	si *pkiasn1.SignerInfo, cert *x509.Certificate, computedDigest []byte, digestHash crypto.Hash,
+) error {
+	setBytes := retagAsSet(si.SignedAttrs.FullBytes)
+	eContentType := p.signedData.EncapContentInfo.EContentType
+	if err := validateSignedAttrs(setBytes, computedDigest, eContentType); err != nil {
+		return err
+	}
+	sigInput, err := computeSigInput(si, digestHash, setBytes)
+	if err != nil {
+		return err
+	}
+	return verifySignature(cert, si, sigInput, digestHash)
+}
+
+// verifyChainAndTimestamps validates the certificate chain and any embedded
+// timestamp tokens for the given SignerInfo.
+func (p *ParsedSignedData) verifyChainAndTimestamps(
+	si *pkiasn1.SignerInfo, cert *x509.Certificate, allCerts []*x509.Certificate, cfg *verifyConfig,
+) error {
 	if !cfg.noChain {
 		if err := validateChain(cert, allCerts, cfg); err != nil {
 			return err
 		}
 	}
-
-	// Step 5: Verify any embedded timestamp tokens.
 	if len(si.UnsignedAttrs.FullBytes) > 0 {
 		if err := verifyTimestampsInSI(si); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
 // verifyTimestampsInSI checks every id-aa-signatureTimeStampToken unsigned
 // attribute in si against si.Signature. Returns an error if any token's
 // MessageImprint does not match hash(si.Signature).
-func verifyTimestampsInSI(si pkiasn1.SignerInfo) error {
+func verifyTimestampsInSI(si *pkiasn1.SignerInfo) error {
 	// Retag [1] IMPLICIT (0xA1) → SET (0x31) for attribute parsing.
 	setBytes := make([]byte, len(si.UnsignedAttrs.FullBytes))
 	copy(setBytes, si.UnsignedAttrs.FullBytes)
@@ -1063,7 +1095,7 @@ func verifyTimestampsInSI(si pkiasn1.SignerInfo) error {
 
 // findSignerCert locates the signing certificate from the given certificates
 // by matching the SignerIdentifier in the SignerInfo.
-func findSignerCert(certs []*x509.Certificate, si pkiasn1.SignerInfo) (*x509.Certificate, error) {
+func findSignerCert(certs []*x509.Certificate, si *pkiasn1.SignerInfo) (*x509.Certificate, error) {
 	switch si.Version {
 	case 1:
 		return findCertByIssuerSerial(certs, si.SID)
@@ -1120,10 +1152,36 @@ func retagAsSet(implicit0Bytes []byte) []byte {
 	return out
 }
 
+// validateContentTypeAttr verifies that the content-type attribute value equals eContentType.
+func validateContentTypeAttr(attr *pkiasn1.Attribute, eContentType asn1.ObjectIdentifier) error {
+	var oid asn1.ObjectIdentifier
+	if _, err := asn1.Unmarshal(attr.Values.Bytes, &oid); err != nil {
+		return wrapError(CodeAttributeInvalid, "parsing content-type attribute value", err)
+	}
+	if !oid.Equal(eContentType) {
+		return newError(CodeContentTypeMismatch,
+			fmt.Sprintf("content-type attribute %s does not match eContentType %s", oid, eContentType))
+	}
+	return nil
+}
+
+// validateMessageDigestAttr verifies that the message-digest attribute value equals computedDigest.
+func validateMessageDigestAttr(attr *pkiasn1.Attribute, computedDigest []byte) error {
+	var messageDigest []byte
+	if _, err := asn1.Unmarshal(attr.Values.Bytes, &messageDigest); err != nil {
+		return wrapError(CodeAttributeInvalid, "parsing message-digest attribute value", err)
+	}
+	if !bytes.Equal(messageDigest, computedDigest) {
+		return newError(CodeAttributeInvalid,
+			"message-digest attribute does not match independently computed digest")
+	}
+	return nil
+}
+
 // validateSignedAttrs parses the SET-tagged signedAttrs bytes and verifies that:
 //   - content-type attribute is present and equals eContentType
 //   - message-digest attribute is present and equals computedDigest
-func validateSignedAttrs(setBytes []byte, computedDigest []byte, eContentType asn1.ObjectIdentifier) error {
+func validateSignedAttrs(setBytes, computedDigest []byte, eContentType asn1.ObjectIdentifier) error {
 	var attrs pkiasn1.RawAttributes
 	if _, err := asn1.UnmarshalWithParams(setBytes, &attrs, "set"); err != nil {
 		return wrapError(CodeParse, "parsing signedAttrs", err)
@@ -1133,24 +1191,13 @@ func validateSignedAttrs(setBytes []byte, computedDigest []byte, eContentType as
 	for _, attr := range attrs {
 		switch {
 		case attr.Type.Equal(pkiasn1.OIDAttributeContentType):
-			var oid asn1.ObjectIdentifier
-			if _, err := asn1.Unmarshal(attr.Values.Bytes, &oid); err != nil {
-				return wrapError(CodeAttributeInvalid, "parsing content-type attribute value", err)
-			}
-			if !oid.Equal(eContentType) {
-				return newError(CodeContentTypeMismatch,
-					fmt.Sprintf("content-type attribute %s does not match eContentType %s", oid, eContentType))
+			if err := validateContentTypeAttr(&attr, eContentType); err != nil {
+				return err
 			}
 			foundCT = true
-
 		case attr.Type.Equal(pkiasn1.OIDAttributeMessageDigest):
-			var messageDigest []byte
-			if _, err := asn1.Unmarshal(attr.Values.Bytes, &messageDigest); err != nil {
-				return wrapError(CodeAttributeInvalid, "parsing message-digest attribute value", err)
-			}
-			if !bytes.Equal(messageDigest, computedDigest) {
-				return newError(CodeAttributeInvalid,
-					"message-digest attribute does not match independently computed digest")
+			if err := validateMessageDigestAttr(&attr, computedDigest); err != nil {
+				return err
 			}
 			foundMD = true
 		}
@@ -1167,7 +1214,7 @@ func validateSignedAttrs(setBytes []byte, computedDigest []byte, eContentType as
 
 // verifySignature verifies the cryptographic signature in si against digest
 // using the public key from cert.
-func verifySignature(cert *x509.Certificate, si pkiasn1.SignerInfo, digest []byte, h crypto.Hash) error {
+func verifySignature(cert *x509.Certificate, si *pkiasn1.SignerInfo, digest []byte, h crypto.Hash) error {
 	sigAlgOID := si.SignatureAlgorithm.Algorithm
 
 	switch {
@@ -1185,7 +1232,7 @@ func verifySignature(cert *x509.Certificate, si pkiasn1.SignerInfo, digest []byt
 		if !ok {
 			return newError(CodeInvalidSignature, "signature algorithm is RSA-PSS but certificate has non-RSA key")
 		}
-		saltLen, err := saltLenFromPSSParams(si.SignatureAlgorithm, h)
+		saltLen, err := saltLenFromPSSParams(&si.SignatureAlgorithm, h)
 		if err != nil {
 			return err
 		}

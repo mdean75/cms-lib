@@ -20,9 +20,9 @@ func TestDigest_AttachedHashAlgorithms(t *testing.T) {
 		name string
 		hash crypto.Hash
 	}{
-		{"SHA-256", crypto.SHA256},
-		{"SHA-384", crypto.SHA384},
-		{"SHA-512", crypto.SHA512},
+		{crypto.SHA256.String(), crypto.SHA256},
+		{crypto.SHA384.String(), crypto.SHA384},
+		{crypto.SHA512.String(), crypto.SHA512},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

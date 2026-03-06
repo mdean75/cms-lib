@@ -57,9 +57,10 @@ const (
 	lenIndefinite   byte = 0x80 // length byte value for BER indefinite-length encoding
 	lenHighBit      byte = 0x80 // high bit of a length byte; set means long-form
 	lenLongFormMask byte = 0x7F // masks the number-of-octets field in a long-form length byte
-	lenLongForm1    byte = 0x81 // long-form header: length value in 1 subsequent byte
-	lenLongForm2    byte = 0x82 // long-form header: length value in 2 subsequent bytes
-	lenLongForm3    byte = 0x83 // long-form header: length value in 3 subsequent bytes
+	lenLongForm1Octet  byte = 0x81 // long-form header: length value in 1 subsequent octet
+	lenLongForm2Octets byte = 0x82 // long-form header: length value in 2 subsequent octets
+	lenLongForm3Octets byte = 0x83 // long-form header: length value in 3 subsequent octets
+	lenLongForm4Octets byte = 0x84 // long-form header: length value in 4 subsequent octets
 	lenShortFormMax      = 127  // maximum content length encodable in short-form (0–127)
 )
 
@@ -392,19 +393,25 @@ func writeTLV(w *bytes.Buffer, tagBytes []byte, length int) {
 	w.Write(tagBytes)
 	switch {
 	case length <= lenShortFormMax:
-		w.WriteByte(byte(length))
+		w.WriteByte(byte(length)) //nolint:gosec // length ≤ 127 per case guard
 	case length < 256:
-		w.WriteByte(lenLongForm1)
-		w.WriteByte(byte(length))
+		w.WriteByte(lenLongForm1Octet)
+		w.WriteByte(byte(length)) //nolint:gosec // length < 256 per case guard
 	case length < 65536:
-		w.WriteByte(lenLongForm2)
-		w.WriteByte(byte(length >> 8))
-		w.WriteByte(byte(length))
+		w.WriteByte(lenLongForm2Octets)
+		w.WriteByte(byte(length >> 8)) //nolint:gosec // upper byte extracted via shift
+		w.WriteByte(byte(length))      //nolint:gosec // lower byte; length < 65536 per case guard
+	case length < 16777216:
+		w.WriteByte(lenLongForm3Octets)
+		w.WriteByte(byte(length >> 16)) //nolint:gosec // upper byte extracted via shift
+		w.WriteByte(byte(length >> 8))  //nolint:gosec // middle byte extracted via shift
+		w.WriteByte(byte(length))       //nolint:gosec // lower byte, mask applied implicitly
 	default:
-		w.WriteByte(lenLongForm3)
-		w.WriteByte(byte(length >> 16))
-		w.WriteByte(byte(length >> 8))
-		w.WriteByte(byte(length))
+		w.WriteByte(lenLongForm4Octets)
+		w.WriteByte(byte(length >> 24)) //nolint:gosec // highest byte extracted via shift
+		w.WriteByte(byte(length >> 16)) //nolint:gosec // upper-middle byte extracted via shift
+		w.WriteByte(byte(length >> 8))  //nolint:gosec // lower-middle byte extracted via shift
+		w.WriteByte(byte(length))       //nolint:gosec // lowest byte, mask applied implicitly
 	}
 }
 

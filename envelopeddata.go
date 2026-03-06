@@ -9,7 +9,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // required for RFC 3278 ECDH KDF interop
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/x509"
@@ -158,7 +158,7 @@ func (e *Encryptor) Encrypt(r io.Reader) ([]byte, error) {
 		EncryptedContentInfo: eci,
 	}
 
-	return marshalEnvelopedDataCI(ed)
+	return marshalEnvelopedDataCI(&ed)
 }
 
 // validate checks builder state and returns a joined error for all problems.
@@ -238,7 +238,7 @@ func (p *ParsedEnvelopedData) Decrypt(key crypto.PrivateKey, cert *x509.Certific
 	if err != nil {
 		return nil, err
 	}
-	return decryptContent(p.envelopedData.EncryptedContentInfo, cek)
+	return decryptContent(&p.envelopedData.EncryptedContentInfo, cek)
 }
 
 // decryptCEK iterates RecipientInfos and decrypts the CEK for the matching recipient.
@@ -334,7 +334,7 @@ func tryDecryptKARI(ri asn1.RawValue, key crypto.PrivateKey, cert *x509.Certific
 	}
 
 	// Determine key wrap OID from KeyEncryptionAlgorithm parameters.
-	keyWrapOID, err := keyWrapOIDFromKEA(kari.KeyEncryptionAlgorithm)
+	keyWrapOID, err := keyWrapOIDFromKEA(&kari.KeyEncryptionAlgorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +356,7 @@ func tryDecryptKARI(ri asn1.RawValue, key crypto.PrivateKey, cert *x509.Certific
 	}
 
 	// Derive KEK using X9.63 KDF.
-	kek, err := x963KDF(sharedSecret, kekLen, kari.KeyEncryptionAlgorithm)
+	kek, err := x963KDF(sharedSecret, kekLen, &kari.KeyEncryptionAlgorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +404,9 @@ func issuerRawEqual(a, b []byte) bool {
 
 // encryptContent generates a random CEK, encrypts plaintext with the chosen
 // algorithm, and returns the CEK, ciphertext, and AlgorithmIdentifier.
-func encryptContent(plaintext []byte, alg ContentEncryptionAlgorithm) (cek, ciphertext []byte, algID pkix.AlgorithmIdentifier, err error) {
+func encryptContent(
+	plaintext []byte, alg ContentEncryptionAlgorithm,
+) (cek, ciphertext []byte, algID pkix.AlgorithmIdentifier, err error) {
 	switch alg {
 	case AES256GCM:
 		return encryptAESGCM(plaintext, 32)
@@ -522,7 +524,7 @@ func extractCiphertext(rv asn1.RawValue) ([]byte, error) {
 }
 
 // decryptContent decrypts the ciphertext in eci using cek.
-func decryptContent(eci pkiasn1.EncryptedContentInfo, cek []byte) ([]byte, error) {
+func decryptContent(eci *pkiasn1.EncryptedContentInfo, cek []byte) ([]byte, error) {
 	ciphertext, err := extractCiphertext(eci.EncryptedContent)
 	if err != nil {
 		return nil, err
@@ -532,11 +534,11 @@ func decryptContent(eci pkiasn1.EncryptedContentInfo, cek []byte) ([]byte, error
 	switch {
 	case algOID.Equal(pkiasn1.OIDContentEncryptionAES128GCM) ||
 		algOID.Equal(pkiasn1.OIDContentEncryptionAES256GCM):
-		return decryptAESGCM(ciphertext, cek, eci.ContentEncryptionAlgorithm)
+		return decryptAESGCM(ciphertext, cek, &eci.ContentEncryptionAlgorithm)
 
 	case algOID.Equal(pkiasn1.OIDContentEncryptionAES128CBC) ||
 		algOID.Equal(pkiasn1.OIDContentEncryptionAES256CBC):
-		return decryptAESCBC(ciphertext, cek, eci.ContentEncryptionAlgorithm)
+		return decryptAESCBC(ciphertext, cek, &eci.ContentEncryptionAlgorithm)
 
 	default:
 		return nil, newError(CodeUnsupportedAlgorithm,
@@ -545,7 +547,7 @@ func decryptContent(eci pkiasn1.EncryptedContentInfo, cek []byte) ([]byte, error
 }
 
 // decryptAESGCM decrypts AES-GCM ciphertext.
-func decryptAESGCM(ciphertext, cek []byte, algID pkix.AlgorithmIdentifier) ([]byte, error) {
+func decryptAESGCM(ciphertext, cek []byte, algID *pkix.AlgorithmIdentifier) ([]byte, error) {
 	var params pkiasn1.GCMParameters
 	if _, err := asn1.Unmarshal(algID.Parameters.FullBytes, &params); err != nil {
 		return nil, wrapError(CodeParse, "parsing GCM parameters", err)
@@ -568,7 +570,7 @@ func decryptAESGCM(ciphertext, cek []byte, algID pkix.AlgorithmIdentifier) ([]by
 }
 
 // decryptAESCBC decrypts AES-CBC ciphertext and removes PKCS#7 padding.
-func decryptAESCBC(ciphertext, cek []byte, algID pkix.AlgorithmIdentifier) ([]byte, error) {
+func decryptAESCBC(ciphertext, cek []byte, algID *pkix.AlgorithmIdentifier) ([]byte, error) {
 	var iv []byte
 	if _, err := asn1.Unmarshal(algID.Parameters.FullBytes, &iv); err != nil {
 		return nil, wrapError(CodeParse, "parsing AES-CBC IV", err)
@@ -679,7 +681,7 @@ func buildECDHRecipientInfo(cert *x509.Certificate, cek []byte) (asn1.RawValue, 
 	}
 
 	// Derive KEK using X9.63 KDF.
-	kek, err := x963KDF(sharedSecret, kekLen, keaAlgID)
+	kek, err := x963KDF(sharedSecret, kekLen, &keaAlgID)
 	if err != nil {
 		return asn1.RawValue{}, err
 	}
@@ -838,7 +840,7 @@ func rsaOAEPAlgID() (pkix.AlgorithmIdentifier, error) {
 	hashAlgID := pkix.AlgorithmIdentifier{Algorithm: pkiasn1.OIDDigestAlgorithmSHA256}
 	mgf := pkix.AlgorithmIdentifier{
 		Algorithm:  pkiasn1.OIDMGF1,
-		Parameters: asn1.RawValue{FullBytes: marshalAlgID(hashAlgID)},
+		Parameters: asn1.RawValue{FullBytes: marshalAlgID(&hashAlgID)},
 	}
 
 	params := struct {
@@ -860,8 +862,8 @@ func rsaOAEPAlgID() (pkix.AlgorithmIdentifier, error) {
 }
 
 // marshalAlgID marshals an AlgorithmIdentifier, panicking on error (programming error).
-func marshalAlgID(algID pkix.AlgorithmIdentifier) []byte {
-	b, err := asn1.Marshal(algID)
+func marshalAlgID(algID *pkix.AlgorithmIdentifier) []byte {
+	b, err := asn1.Marshal(*algID)
 	if err != nil {
 		panic(fmt.Sprintf("cms: marshalAlgID: %v", err))
 	}
@@ -898,7 +900,7 @@ func ecdhOIDsForCurve(curve ecdh.Curve) (kaOID, kwOID asn1.ObjectIdentifier, err
 }
 
 // keyWrapOIDFromKEA extracts the key wrap OID from the KeyEncryptionAlgorithm params.
-func keyWrapOIDFromKEA(keaAlgID pkix.AlgorithmIdentifier) (asn1.ObjectIdentifier, error) {
+func keyWrapOIDFromKEA(keaAlgID *pkix.AlgorithmIdentifier) (asn1.ObjectIdentifier, error) {
 	var kwAlgID pkix.AlgorithmIdentifier
 	if _, err := asn1.Unmarshal(keaAlgID.Parameters.FullBytes, &kwAlgID); err != nil {
 		return nil, wrapError(CodeParse, "parsing key wrap AlgID from KARI KeyEncryptionAlgorithm", err)
@@ -971,7 +973,7 @@ func curveFromPublicKeyLen(b []byte) (ecdh.Curve, error) {
 //
 // Each round computes: Hash(Z || counter || DER(ECC-CMS-SharedInfo))
 // where counter is a 4-byte big-endian unsigned integer starting at 1.
-func x963KDF(z []byte, keydatalen int, algID pkix.AlgorithmIdentifier) ([]byte, error) {
+func x963KDF(z []byte, keydatalen int, algID *pkix.AlgorithmIdentifier) ([]byte, error) {
 	kwOID, err := keyWrapOIDFromKEA(algID)
 	if err != nil {
 		return nil, err
@@ -979,7 +981,7 @@ func x963KDF(z []byte, keydatalen int, algID pkix.AlgorithmIdentifier) ([]byte, 
 
 	// Build ECC-CMS-SharedInfo: SEQUENCE { keyInfo AlgID, suppPubInfo [2] OCTET STRING }.
 	suppPubBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(suppPubBytes, uint32(keydatalen*8))
+	binary.BigEndian.PutUint32(suppPubBytes, uint32(keydatalen*8)) //nolint:gosec // keydatalen ≤ 64 (AES key size)
 	sharedInfoStruct := struct {
 		KeyInfo     pkix.AlgorithmIdentifier
 		SuppPubInfo []byte `asn1:"explicit,tag:2"`
@@ -1013,7 +1015,7 @@ func x963KDF(z []byte, keydatalen int, algID pkix.AlgorithmIdentifier) ([]byte, 
 }
 
 // kdfHashForKAOID returns the hash.Hash and output size for the given ECDH OID.
-func kdfHashForKAOID(oid asn1.ObjectIdentifier) (kdfHash, int, error) {
+func kdfHashForKAOID(oid asn1.ObjectIdentifier) (h kdfHash, size int, err error) {
 	switch {
 	case oid.Equal(pkiasn1.OIDKeyAgreeECDHSHA1):
 		return sha1.New(), sha1.Size, nil //nolint:gosec // SHA-1 required for RFC 3278 interop
@@ -1055,12 +1057,12 @@ func aesKeyWrap(kek, cek []byte) ([]byte, error) {
 	}
 
 	buf := make([]byte, 16)
-	for j := 0; j < 6; j++ {
-		for i := 0; i < n; i++ {
+	for j := range 6 {
+		for i := range n {
 			copy(buf[:8], a)
 			copy(buf[8:], r[i])
 			block.Encrypt(buf, buf)
-			t := uint64(n*j + i + 1)
+			t := uint64(n*j + i + 1) //nolint:gosec // AES key wrap counter: n ≤ 8
 			for k := 7; k >= 0; k-- {
 				a[k] = buf[k] ^ byte(t)
 				t >>= 8
@@ -1101,7 +1103,7 @@ func aesKeyUnwrap(kek, wrapped []byte) ([]byte, error) {
 	buf := make([]byte, 16)
 	for j := 5; j >= 0; j-- {
 		for i := n - 1; i >= 0; i-- {
-			t := uint64(n*j + i + 1)
+			t := uint64(n*j + i + 1) //nolint:gosec // AES key unwrap counter: n ≤ 8
 			tmp := make([]byte, 8)
 			copy(tmp, a)
 			for k := 7; k >= 0; k-- {
@@ -1137,7 +1139,7 @@ func pkcs7Pad(plaintext []byte, blockSize int) []byte {
 	padded := make([]byte, len(plaintext)+pad)
 	copy(padded, plaintext)
 	for i := len(plaintext); i < len(padded); i++ {
-		padded[i] = byte(pad)
+		padded[i] = byte(pad) //nolint:gosec // pad ≤ blockSize (16 for AES)
 	}
 	return padded
 }
@@ -1164,8 +1166,8 @@ func pkcs7Unpad(plaintext []byte) ([]byte, error) {
 }
 
 // marshalEnvelopedDataCI wraps EnvelopedData in a ContentInfo and returns DER bytes.
-func marshalEnvelopedDataCI(ed pkiasn1.EnvelopedData) ([]byte, error) {
-	edBytes, err := asn1.Marshal(ed)
+func marshalEnvelopedDataCI(ed *pkiasn1.EnvelopedData) ([]byte, error) {
+	edBytes, err := asn1.Marshal(*ed)
 	if err != nil {
 		return nil, wrapError(CodeParse, "marshaling EnvelopedData", err)
 	}

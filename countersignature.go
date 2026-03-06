@@ -73,8 +73,8 @@ func (cs *CounterSigner) CounterSign(r io.Reader) ([]byte, error) {
 	sd := psd.signedData
 
 	// Build a counter-signature for each target SignerInfo.
-	for i, targetSI := range sd.SignerInfos {
-		counterSI, csErr := cs.buildCounterSigFor(targetSI)
+	for i := range sd.SignerInfos {
+		counterSI, csErr := cs.buildCounterSigFor(&sd.SignerInfos[i])
 		if csErr != nil {
 			return nil, wrapError(CodeCounterSignature,
 				fmt.Sprintf("building counter-signature for SignerInfo[%d]", i), csErr)
@@ -100,27 +100,15 @@ func (cs *CounterSigner) CounterSign(r io.Reader) ([]byte, error) {
 
 	// Add the counter-signer's certificate (and any extra certs) to the set.
 	allNewCerts := append([]*x509.Certificate{cs.cert}, cs.extraCerts...)
-	for _, cert := range allNewCerts {
-		k := string(cert.Raw)
-		alreadyPresent := false
-		for _, existing := range psd.certs {
-			if string(existing.Raw) == k {
-				alreadyPresent = true
-				break
-			}
-		}
-		if !alreadyPresent {
-			sd.Certificates = append(sd.Certificates, asn1.RawValue{FullBytes: cert.Raw})
-		}
-	}
+	mergeCerts(&sd, psd.certs, allNewCerts)
 
-	return marshalContentInfo(sd)
+	return marshalContentInfo(&sd)
 }
 
 // buildCounterSigFor constructs the SignerInfo that counter-signs targetSI.
 // The counter-signature signs targetSI.Signature with signed attributes where
 // content-type is id-data and message-digest is hash(targetSI.Signature).
-func (cs *CounterSigner) buildCounterSigFor(targetSI pkiasn1.SignerInfo) (pkiasn1.SignerInfo, error) {
+func (cs *CounterSigner) buildCounterSigFor(targetSI *pkiasn1.SignerInfo) (pkiasn1.SignerInfo, error) {
 	effectiveHash := hashForKey(cs.key, cs.hash, cs.hashExplicit)
 
 	family := cs.family
@@ -227,7 +215,9 @@ func (cs *CounterSigner) sign(digest []byte, h crypto.Hash, family signatureFami
 }
 
 // buildSignerInfo assembles the SignerInfo for the counter-signature.
-func (cs *CounterSigner) buildSignerInfo(h crypto.Hash, family signatureFamily, signedAttrsBytes, sig []byte) (pkiasn1.SignerInfo, error) {
+func (cs *CounterSigner) buildSignerInfo(
+	h crypto.Hash, family signatureFamily, signedAttrsBytes, sig []byte,
+) (pkiasn1.SignerInfo, error) {
 	digestAlg, err := digestAlgID(h)
 	if err != nil {
 		return pkiasn1.SignerInfo{}, err
@@ -283,4 +273,22 @@ func mergeUnsignedAttr(existing asn1.RawValue, attrType asn1.ObjectIdentifier, v
 	}
 
 	return asn1.RawValue{FullBytes: retagAsImplicit1(encoded)}, nil
+}
+
+// mergeCerts appends certificates from newCerts into sd.Certificates, skipping
+// any already present in existing.
+func mergeCerts(sd *pkiasn1.SignedData, existing, newCerts []*x509.Certificate) {
+	for _, cert := range newCerts {
+		k := string(cert.Raw)
+		alreadyPresent := false
+		for _, ex := range existing {
+			if string(ex.Raw) == k {
+				alreadyPresent = true
+				break
+			}
+		}
+		if !alreadyPresent {
+			sd.Certificates = append(sd.Certificates, asn1.RawValue{FullBytes: cert.Raw})
+		}
+	}
 }

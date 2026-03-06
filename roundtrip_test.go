@@ -38,6 +38,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 		{
 			name: "RSA PKCS1v15 attached SHA-256",
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedRSA(t, 2048)
 				s, err := NewSigner(cert, key, WithRSAPKCS1(), WithHash(crypto.SHA256))
 				require.NoError(t, err)
@@ -49,6 +50,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 		{
 			name: "RSA-PSS attached SHA-256",
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedRSA(t, 2048)
 				s, err := NewSigner(cert, key, WithHash(crypto.SHA256))
 				require.NoError(t, err)
@@ -60,6 +62,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 		{
 			name: "ECDSA P-256 attached SHA-256",
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedECDSA(t, elliptic.P256())
 				s, err := NewSigner(cert, key, WithHash(crypto.SHA256))
 				require.NoError(t, err)
@@ -72,6 +75,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			name:     "RSA PKCS1v15 detached SHA-256",
 			detached: true,
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedRSA(t, 2048)
 				s, err := NewSigner(cert, key, WithRSAPKCS1(), WithHash(crypto.SHA256), WithDetachedContent())
 				require.NoError(t, err)
@@ -84,6 +88,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			name:     "RSA-PSS detached SHA-256",
 			detached: true,
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedRSA(t, 2048)
 				s, err := NewSigner(cert, key, WithHash(crypto.SHA256), WithDetachedContent())
 				require.NoError(t, err)
@@ -95,6 +100,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 		{
 			name: "RSA-PSS attached SHA-384",
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedRSA(t, 2048)
 				s, err := NewSigner(cert, key, WithHash(crypto.SHA384))
 				require.NoError(t, err)
@@ -106,6 +112,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 		{
 			name: "RSA-PSS attached SHA-512",
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedRSA(t, 2048)
 				s, err := NewSigner(cert, key, WithHash(crypto.SHA512))
 				require.NoError(t, err)
@@ -118,6 +125,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			name:     "ECDSA P-256 detached SHA-256",
 			detached: true,
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedECDSA(t, elliptic.P256())
 				s, err := NewSigner(cert, key, WithDetachedContent())
 				require.NoError(t, err)
@@ -129,6 +137,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 		{
 			name: "ECDSA P-384 attached SHA-384",
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedECDSA(t, elliptic.P384())
 				s, err := NewSigner(cert, key)
 				require.NoError(t, err)
@@ -141,6 +150,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 			name:     "ECDSA P-384 detached SHA-384",
 			detached: true,
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedECDSA(t, elliptic.P384())
 				s, err := NewSigner(cert, key, WithDetachedContent())
 				require.NoError(t, err)
@@ -152,6 +162,7 @@ func TestRoundTrip_LibraryOutputVerifiedByOpenSSL(t *testing.T) {
 		{
 			name: "ECDSA P-521 attached SHA-512",
 			sign: func(t *testing.T) []byte {
+				t.Helper()
 				cert, key := generateSelfSignedECDSA(t, elliptic.P521())
 				s, err := NewSigner(cert, key)
 				require.NoError(t, err)

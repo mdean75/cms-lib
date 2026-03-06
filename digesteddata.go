@@ -111,7 +111,7 @@ func (d *Digester) Digest(r io.Reader) ([]byte, error) {
 		Digest:           digest,
 	}
 
-	return marshalDigestedDataCI(dd)
+	return marshalDigestedDataCI(&dd)
 }
 
 // validate checks that accumulated errors are nil and the hash algorithm is supported.
@@ -170,8 +170,8 @@ func (d *Digester) buildECI(content []byte) (pkiasn1.EncapsulatedContentInfo, er
 }
 
 // marshalDigestedDataCI wraps DigestedData in a ContentInfo and returns DER bytes.
-func marshalDigestedDataCI(dd pkiasn1.DigestedData) ([]byte, error) {
-	ddBytes, err := asn1.Marshal(dd)
+func marshalDigestedDataCI(dd *pkiasn1.DigestedData) ([]byte, error) {
+	ddBytes, err := asn1.Marshal(*dd)
 	if err != nil {
 		return nil, wrapError(CodeParse, "marshaling DigestedData", err)
 	}

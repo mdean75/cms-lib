@@ -203,10 +203,8 @@ func TestEncryptor_BuilderErrors(t *testing.T) {
 			errMsg:  "certificate is nil",
 		},
 		{
-			name: "no recipients",
-			build: func() *Encryptor {
-				return NewEncryptor()
-			},
+			name:  "no recipients",
+			build: NewEncryptor,
 			wantErr: true,
 			errMsg:  "at least one recipient is required",
 		},

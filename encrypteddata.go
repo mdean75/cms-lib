@@ -102,7 +102,7 @@ func (se *SymmetricEncryptor) Encrypt(r io.Reader) ([]byte, error) {
 		EncryptedContentInfo: eci,
 	}
 
-	return marshalEncryptedDataCI(ed)
+	return marshalEncryptedDataCI(&ed)
 }
 
 // validate checks that all accumulated configuration errors are nil and that
@@ -183,7 +183,7 @@ func (p *ParsedEncryptedData) Decrypt(key []byte) ([]byte, error) {
 	if err := validateSymKey(key, alg); err != nil {
 		return nil, err
 	}
-	return decryptContent(p.encryptedData.EncryptedContentInfo, key)
+	return decryptContent(&p.encryptedData.EncryptedContentInfo, key)
 }
 
 // --- Internal helpers ---
@@ -227,7 +227,9 @@ func contentEncAlgFromOID(oid asn1.ObjectIdentifier) (ContentEncryptionAlgorithm
 
 // encryptWithKey encrypts plaintext using the provided key and algorithm.
 // The key length must already be validated to match alg.
-func encryptWithKey(plaintext []byte, alg ContentEncryptionAlgorithm, key []byte) (ciphertext []byte, algID pkix.AlgorithmIdentifier, err error) {
+func encryptWithKey(
+	plaintext []byte, alg ContentEncryptionAlgorithm, key []byte,
+) (ciphertext []byte, algID pkix.AlgorithmIdentifier, err error) {
 	switch alg {
 	case AES256GCM, AES128GCM:
 		return encryptAESGCMWithKey(plaintext, key)
@@ -308,8 +310,8 @@ func encryptAESCBCWithKey(plaintext, key []byte) (ciphertext []byte, algID pkix.
 }
 
 // marshalEncryptedDataCI wraps EncryptedData in a ContentInfo and returns DER bytes.
-func marshalEncryptedDataCI(ed pkiasn1.EncryptedData) ([]byte, error) {
-	edBytes, err := asn1.Marshal(ed)
+func marshalEncryptedDataCI(ed *pkiasn1.EncryptedData) ([]byte, error) {
+	edBytes, err := asn1.Marshal(*ed)
 	if err != nil {
 		return nil, wrapError(CodeParse, "marshaling EncryptedData", err)
 	}

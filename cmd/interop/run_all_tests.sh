@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # run_all_tests.sh — exercises all four signing combinations and verifies each
-# with the cms-lib Go library, OpenSSL, Bouncy Castle, and go.mozilla.org/pkcs7.
+# with the cms-lib Go library, OpenSSL, Bouncy Castle, go.mozilla.org/pkcs7,
+# and github.com/smimesign/ietf-cms.
+#
+# Known limitations under test (documented, not bugs in cms-lib):
+#   go.mozilla.org/pkcs7   — no SubjectKeyIdentifier support
+#   smimesign/ietf-cms     — SKI verification broken: FindCertificate compares
+#                            raw SKI bytes against DER-encoded ext.Value instead
+#                            of cert.SubjectKeyId
 #
 # Usage:
-#   ./run_all_tests.sh [--skip-bc] [--skip-pkcs7]
+#   ./run_all_tests.sh [--skip-bc] [--skip-pkcs7] [--skip-ietf-cms]
 #
 # Flags:
-#   --skip-bc     skip Bouncy Castle tests (requires groovy + Java)
-#   --skip-pkcs7  skip the pkcs7 verifier tests
+#   --skip-bc        skip Bouncy Castle tests (requires groovy + Java)
+#   --skip-pkcs7     skip the go.mozilla.org/pkcs7 verifier tests
+#   --skip-ietf-cms  skip the github.com/smimesign/ietf-cms verifier tests
 #
 # Run from cmd/interop/
 
@@ -16,11 +24,13 @@ set -euo pipefail
 # --- option parsing ---
 SKIP_BC=false
 SKIP_PKCS7=false
+SKIP_IETF_CMS=false
 for arg in "$@"; do
     case "$arg" in
-        --skip-bc)     SKIP_BC=true ;;
-        --skip-pkcs7)  SKIP_PKCS7=true ;;
-        *) echo "Unknown option: $arg  (usage: ./run_all_tests.sh [--skip-bc] [--skip-pkcs7])" >&2; exit 1 ;;
+        --skip-bc)        SKIP_BC=true ;;
+        --skip-pkcs7)     SKIP_PKCS7=true ;;
+        --skip-ietf-cms)  SKIP_IETF_CMS=true ;;
+        *) echo "Unknown option: $arg  (usage: ./run_all_tests.sh [--skip-bc] [--skip-pkcs7] [--skip-ietf-cms])" >&2; exit 1 ;;
     esac
 done
 
@@ -102,7 +112,7 @@ for combo in "${combinations[@]}"; do
             groovy verify_bc.groovy "$embed_arg"
     fi
 
-    # 4. pkcs7 verify — known failure for ski
+    # 4. go.mozilla.org/pkcs7 — known failure for ski (no SKI support)
     if [[ "$SKIP_PKCS7" == "true" ]]; then
         skipped "pkcs7 verify         ($label)"
     else
@@ -110,6 +120,16 @@ for combo in "${combinations[@]}"; do
         [[ "$identifier" == "ski" ]] && known="true" || known="false"
         run_step "pkcs7 verify         ($label)" "$known" \
             go run ../verify-pkcs7/ -identifier "$identifier" -embed="$embed_bool"
+    fi
+
+    # 5. github.com/smimesign/ietf-cms — known failure for ski (broken SKI comparison bug)
+    if [[ "$SKIP_IETF_CMS" == "true" ]]; then
+        skipped "ietf-cms verify      ($label)"
+    else
+        known=""
+        [[ "$identifier" == "ski" ]] && known="true" || known="false"
+        run_step "ietf-cms verify      ($label)" "$known" \
+            go run ../verify-ietf-cms/ -identifier "$identifier" -embed="$embed_bool"
     fi
 done
 
@@ -120,7 +140,9 @@ echo "  Results"
 echo "------------------------------------------------"
 echo -e "  ${GREEN}PASS${RESET}        $PASS"
 if [[ $KNOWN_FAIL -gt 0 ]]; then
-    echo -e "  ${YELLOW}KNOWN FAIL${RESET}  $KNOWN_FAIL  (pkcs7 SKI limitation — expected)"
+    echo -e "  ${YELLOW}KNOWN FAIL${RESET}  $KNOWN_FAIL"
+    echo    "    pkcs7:    no SubjectKeyIdentifier support"
+    echo    "    ietf-cms: SKI comparison bug in FindCertificate"
 fi
 if [[ $SKIP -gt 0 ]]; then
     echo "  SKIP        $SKIP"

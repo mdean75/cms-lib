@@ -365,4 +365,7 @@ _, err := cms.NewSigner().
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for instructions on regenerating interop test
-fixtures (OpenSSL and Bouncy Castle).
+fixtures (OpenSSL and Bouncy Castle) and for running the live interop tools in `cmd/`,
+which verify that this library's output is accepted by OpenSSL, Bouncy Castle,
+`go.mozilla.org/pkcs7`, and `github.com/smimesign/ietf-cms`. Note that `cmd/` is a
+separate Go module and is not included in `go test ./...` from the repository root.

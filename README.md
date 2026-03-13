@@ -362,6 +362,22 @@ _, err := cms.NewSigner().
 
 ---
 
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).
+See [COPYRIGHT.md](COPYRIGHT.md) for copyright information.
+
+## Contributing
+
+Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for
+guidelines on reporting issues, submitting pull requests, and code style expectations.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a history of notable changes.
+
+---
+
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for instructions on regenerating interop test

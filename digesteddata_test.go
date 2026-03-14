@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto"
 	"encoding/asn1"
-	"errors"
 	"strings"
 	"testing"
 
@@ -27,9 +26,11 @@ func TestDigest_AttachedHashAlgorithms(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			content := []byte("hello world")
-			der, err := NewDigester().
-				WithHash(tt.hash).
-				Digest(FromBytes(content))
+
+			d, err := NewDigester(WithHash(tt.hash))
+			require.NoError(t, err)
+
+			der, err := d.Digest(FromBytes(content))
 			require.NoError(t, err)
 
 			p, err := ParseDigestedData(FromBytes(der))
@@ -44,9 +45,10 @@ func TestDigest_AttachedHashAlgorithms(t *testing.T) {
 func TestDigest_DetachedMode(t *testing.T) {
 	content := []byte("hello world")
 
-	der, err := NewDigester().
-		WithDetachedContent().
-		Digest(FromBytes(content))
+	d, err := NewDigester(WithDetachedContent())
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -62,7 +64,10 @@ func TestDigest_DetachedMode(t *testing.T) {
 func TestDigest_AttachedVerifyDetachedReturnsError(t *testing.T) {
 	content := []byte("hello world")
 
-	der, err := NewDigester().Digest(FromBytes(content))
+	d, err := NewDigester()
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -78,7 +83,10 @@ func TestDigest_AttachedVerifyDetachedReturnsError(t *testing.T) {
 func TestDigest_ContentReturnsCorrectBytes(t *testing.T) {
 	content := []byte("test content bytes")
 
-	der, err := NewDigester().Digest(FromBytes(content))
+	d, err := NewDigester()
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -97,7 +105,11 @@ func TestDigest_ContentReturnsCorrectBytes(t *testing.T) {
 // ErrDetachedContentMismatch when called on a detached DigestedData.
 func TestDigest_ContentOnDetachedReturnsError(t *testing.T) {
 	content := []byte("hello")
-	der, err := NewDigester().WithDetachedContent().Digest(FromBytes(content))
+
+	d, err := NewDigester(WithDetachedContent())
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -111,7 +123,11 @@ func TestDigest_ContentOnDetachedReturnsError(t *testing.T) {
 // causes Verify to return ErrInvalidSignature.
 func TestDigest_TamperedDigest(t *testing.T) {
 	content := []byte("authentic content")
-	der, err := NewDigester().Digest(FromBytes(content))
+
+	d, err := NewDigester()
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -130,7 +146,10 @@ func TestDigest_TamperedDigest(t *testing.T) {
 func TestDigest_WrongDetachedContent(t *testing.T) {
 	content := []byte("original content")
 
-	der, err := NewDigester().WithDetachedContent().Digest(FromBytes(content))
+	d, err := NewDigester(WithDetachedContent())
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -142,7 +161,10 @@ func TestDigest_WrongDetachedContent(t *testing.T) {
 
 // TestDigest_EmptyContent verifies that DigestedData handles a zero-byte payload.
 func TestDigest_EmptyContent(t *testing.T) {
-	der, err := NewDigester().Digest(FromBytes([]byte{}))
+	d, err := NewDigester()
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes([]byte{}))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -164,9 +186,10 @@ func TestDigest_CustomContentType(t *testing.T) {
 	customOID := pkiasn1.OIDSignedData // any non-id-data OID
 	content := []byte("custom type content")
 
-	der, err := NewDigester().
-		WithContentType(customOID).
-		Digest(FromBytes(content))
+	d, err := NewDigester(WithContentType(customOID))
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))
@@ -182,9 +205,10 @@ func TestDigest_CustomContentType(t *testing.T) {
 func TestDigest_PayloadTooLarge(t *testing.T) {
 	content := bytes.Repeat([]byte("A"), 100)
 
-	_, err := NewDigester().
-		WithMaxContentSize(50).
-		Digest(FromBytes(content))
+	d, err := NewDigester(WithMaxContentSize(50))
+	require.NoError(t, err)
+
+	_, err = d.Digest(FromBytes(content))
 	require.ErrorIs(t, err, ErrPayloadTooLarge)
 }
 
@@ -202,35 +226,33 @@ func TestDigest_ParseWrongContentType(t *testing.T) {
 	require.ErrorIs(t, err, ErrParse)
 }
 
-// TestDigest_BuilderErrors verifies that configuration errors are accumulated
-// and reported together at Digest time.
+// TestDigest_BuilderErrors verifies that configuration errors are reported
+// by NewDigester.
 func TestDigest_BuilderErrors(t *testing.T) {
 	tests := []struct {
 		name    string
-		build   func() *Digester
+		build   func() (*Digester, error)
 		wantMsg string
 	}{
 		{
 			name: "empty content type OID",
-			build: func() *Digester {
-				return NewDigester().WithContentType(asn1.ObjectIdentifier{})
+			build: func() (*Digester, error) {
+				return NewDigester(WithContentType(asn1.ObjectIdentifier{}))
 			},
 			wantMsg: "content type OID is empty",
 		},
 		{
 			name: "unsupported hash algorithm",
-			build: func() *Digester {
-				return NewDigester().WithHash(crypto.MD5)
+			build: func() (*Digester, error) {
+				return NewDigester(WithHash(crypto.MD5))
 			},
 			wantMsg: "not supported",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.build().Digest(FromBytes([]byte("content")))
+			_, err := tt.build()
 			require.Error(t, err)
-			assert.True(t, errors.Is(err, ErrInvalidConfiguration) || errors.Is(err, ErrUnsupportedAlgorithm),
-				"expected config or unsupported algorithm error, got: %v", err)
 			assert.True(t, strings.Contains(err.Error(), tt.wantMsg),
 				"expected message to contain %q, got: %v", tt.wantMsg, err)
 		})
@@ -239,7 +261,10 @@ func TestDigest_BuilderErrors(t *testing.T) {
 
 // TestDigest_DefaultVersion verifies that id-data content type produces version 0.
 func TestDigest_DefaultVersion(t *testing.T) {
-	der, err := NewDigester().Digest(FromBytes([]byte("content")))
+	d, err := NewDigester()
+	require.NoError(t, err)
+
+	der, err := d.Digest(FromBytes([]byte("content")))
 	require.NoError(t, err)
 
 	p, err := ParseDigestedData(FromBytes(der))

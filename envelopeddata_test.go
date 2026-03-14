@@ -30,10 +30,10 @@ func TestEncryptDecrypt_RSA(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			der, err := NewEncryptor().
-				WithRecipient(cert).
-				WithContentEncryption(tt.alg).
-				Encrypt(bytes.NewReader(plaintext))
+			enc, err := NewEncryptor(WithRecipient(cert), WithContentEncryption(tt.alg))
+			require.NoError(t, err)
+
+			der, err := enc.Encrypt(bytes.NewReader(plaintext))
 			require.NoError(t, err)
 			require.NotEmpty(t, der)
 
@@ -64,10 +64,10 @@ func TestEncryptDecrypt_ECDH(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cert, key := generateSelfSignedECDSA(t, tt.curve)
 
-			der, err := NewEncryptor().
-				WithRecipient(cert).
-				WithContentEncryption(AES256GCM).
-				Encrypt(bytes.NewReader(plaintext))
+			enc, err := NewEncryptor(WithRecipient(cert), WithContentEncryption(AES256GCM))
+			require.NoError(t, err)
+
+			der, err := enc.Encrypt(bytes.NewReader(plaintext))
 			require.NoError(t, err)
 			require.NotEmpty(t, der)
 
@@ -88,11 +88,14 @@ func TestEncryptDecrypt_MultipleRecipients(t *testing.T) {
 	ecCert, ecKey := generateSelfSignedECDSA(t, elliptic.P256())
 	plaintext := []byte("multi-recipient message")
 
-	der, err := NewEncryptor().
-		WithRecipient(rsaCert).
-		WithRecipient(ecCert).
-		WithContentEncryption(AES256GCM).
-		Encrypt(bytes.NewReader(plaintext))
+	enc, err := NewEncryptor(
+		WithRecipient(rsaCert),
+		WithRecipient(ecCert),
+		WithContentEncryption(AES256GCM),
+	)
+	require.NoError(t, err)
+
+	der, err := enc.Encrypt(bytes.NewReader(plaintext))
 	require.NoError(t, err)
 
 	// RSA recipient decrypts.
@@ -116,9 +119,10 @@ func TestDecrypt_WrongKey(t *testing.T) {
 	cert, _ := generateSelfSignedRSA(t, 2048)
 	wrongCert, wrongKey := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewEncryptor().
-		WithRecipient(cert).
-		Encrypt(bytes.NewReader([]byte("secret")))
+	enc, err := NewEncryptor(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := enc.Encrypt(bytes.NewReader([]byte("secret")))
 	require.NoError(t, err)
 
 	parsed, err := ParseEnvelopedData(bytes.NewReader(der))
@@ -136,9 +140,10 @@ func TestDecrypt_WrongKeyECDH(t *testing.T) {
 	cert, _ := generateSelfSignedECDSA(t, elliptic.P256())
 	wrongCert, wrongKey := generateSelfSignedECDSA(t, elliptic.P256())
 
-	der, err := NewEncryptor().
-		WithRecipient(cert).
-		Encrypt(bytes.NewReader([]byte("secret")))
+	enc, err := NewEncryptor(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := enc.Encrypt(bytes.NewReader([]byte("secret")))
 	require.NoError(t, err)
 
 	parsed, err := ParseEnvelopedData(bytes.NewReader(der))
@@ -156,10 +161,10 @@ func TestEncryptDecrypt_EmptyContent(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
 	for _, alg := range []ContentEncryptionAlgorithm{AES256GCM, AES256CBC} {
-		der, err := NewEncryptor().
-			WithRecipient(cert).
-			WithContentEncryption(alg).
-			Encrypt(bytes.NewReader(nil))
+		enc, err := NewEncryptor(WithRecipient(cert), WithContentEncryption(alg))
+		require.NoError(t, err)
+
+		der, err := enc.Encrypt(bytes.NewReader(nil))
 		require.NoError(t, err)
 
 		parsed, err := ParseEnvelopedData(bytes.NewReader(der))
@@ -175,36 +180,36 @@ func TestEncryptDecrypt_EmptyContent(t *testing.T) {
 func TestEncrypt_PayloadTooLarge(t *testing.T) {
 	cert, _ := generateSelfSignedRSA(t, 2048)
 
+	enc, err := NewEncryptor(WithRecipient(cert), WithMaxContentSize(10))
+	require.NoError(t, err)
+
 	// 11 bytes with a 10-byte limit.
 	payload := strings.Repeat("x", 11)
-	_, err := NewEncryptor().
-		WithRecipient(cert).
-		WithMaxContentSize(10).
-		Encrypt(strings.NewReader(payload))
+	_, err = enc.Encrypt(strings.NewReader(payload))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrPayloadTooLarge))
 }
 
-// TestEncryptor_BuilderErrors verifies that configuration errors are accumulated
-// and reported by Encrypt.
+// TestEncryptor_BuilderErrors verifies that configuration errors are reported
+// by NewEncryptor.
 func TestEncryptor_BuilderErrors(t *testing.T) {
 	tests := []struct {
 		name    string
-		build   func() *Encryptor
+		build   func() (*Encryptor, error)
 		wantErr bool
 		errMsg  string
 	}{
 		{
 			name: "nil certificate",
-			build: func() *Encryptor {
-				return NewEncryptor().WithRecipient(nil)
+			build: func() (*Encryptor, error) {
+				return NewEncryptor(WithRecipient(nil))
 			},
 			wantErr: true,
 			errMsg:  "certificate is nil",
 		},
 		{
-			name:  "no recipients",
-			build: NewEncryptor,
+			name:    "no recipients",
+			build:   func() (*Encryptor, error) { return NewEncryptor() },
 			wantErr: true,
 			errMsg:  "at least one recipient is required",
 		},
@@ -212,7 +217,7 @@ func TestEncryptor_BuilderErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.build().Encrypt(bytes.NewReader([]byte("data")))
+			_, err := tt.build()
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.True(t, errors.Is(err, ErrInvalidConfiguration))
@@ -224,13 +229,11 @@ func TestEncryptor_BuilderErrors(t *testing.T) {
 }
 
 // TestEncryptor_UnsupportedKeyType verifies that a certificate with an
-// unsupported public key type is rejected at WithRecipient time.
+// unsupported public key type is rejected at NewEncryptor time.
 func TestEncryptor_UnsupportedKeyType(t *testing.T) {
 	// Ed25519 certificate — unsupported for key transport.
 	cert, _ := generateSelfSignedEd25519(t)
-	_, err := NewEncryptor().
-		WithRecipient(cert).
-		Encrypt(bytes.NewReader([]byte("data")))
+	_, err := NewEncryptor(WithRecipient(cert))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrUnsupportedAlgorithm))
 }
@@ -241,9 +244,10 @@ func TestEncryptDecrypt_Defaults(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 	plaintext := []byte("default algorithm test")
 
-	der, err := NewEncryptor().
-		WithRecipient(cert).
-		Encrypt(bytes.NewReader(plaintext))
+	enc, err := NewEncryptor(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := enc.Encrypt(bytes.NewReader(plaintext))
 	require.NoError(t, err)
 
 	parsed, err := ParseEnvelopedData(bytes.NewReader(der))
@@ -270,7 +274,6 @@ func TestParseEnvelopedData_WrongContentType(t *testing.T) {
 }
 
 // BenchmarkEncrypt benchmarks a single RSA-OAEP + AES-256-GCM Encrypt call.
-// Certificate generation happens in TestMain-style setup via a sub-test.
 var benchEnvelopedResult []byte
 
 func BenchmarkEncrypt_RSAOAEP_AES256GCM(b *testing.B) {
@@ -280,18 +283,19 @@ func BenchmarkEncrypt_RSAOAEP_AES256GCM(b *testing.B) {
 	plaintext := make([]byte, 1024)
 	_, _ = rand.Read(plaintext)
 
-	enc := NewEncryptor().
-		WithRecipient(cert).
-		WithContentEncryption(AES256GCM)
+	enc, err := NewEncryptor(WithRecipient(cert), WithContentEncryption(AES256GCM))
+	if err != nil {
+		b.Fatal(err)
+	}
 
 	var (
 		result []byte
-		err    error
+		encErr error
 	)
 	for b.Loop() {
-		result, err = enc.Encrypt(bytes.NewReader(plaintext))
-		if err != nil {
-			b.Fatal(err)
+		result, encErr = enc.Encrypt(bytes.NewReader(plaintext))
+		if encErr != nil {
+			b.Fatal(encErr)
 		}
 	}
 	benchEnvelopedResult = result

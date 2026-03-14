@@ -12,76 +12,49 @@ import (
 	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
-// SymmetricEncryptor builds a CMS EncryptedData message using a fluent builder
-// API. The caller supplies the symmetric key directly. Builder methods accumulate
-// configuration and errors; Encrypt reports all configuration errors at once.
-// SymmetricEncryptor methods are not safe for concurrent use; Encrypt is safe
-// for concurrent use once the builder is fully configured.
+// SymmetricEncryptor builds a CMS EncryptedData message. The caller supplies
+// the symmetric key directly via WithKey. Configure with functional options
+// passed to NewSymmetricEncryptor. Encrypt is safe for concurrent use once
+// constructed.
 type SymmetricEncryptor struct {
 	key         []byte
 	contentAlg  ContentEncryptionAlgorithm
 	contentType asn1.ObjectIdentifier
 	maxSize     int64
-	errs        []error
 }
 
-// NewSymmetricEncryptor returns a new SymmetricEncryptor with default settings:
-//   - AES-256-GCM content encryption
-//   - id-data content type
-//   - 64 MiB content size limit
-func NewSymmetricEncryptor() *SymmetricEncryptor {
-	return &SymmetricEncryptor{
+// NewSymmetricEncryptor returns a new SymmetricEncryptor configured with opts
+// and validates the configuration immediately. Returns an error if any option
+// is invalid, if no key is provided, or if the key length does not match the
+// chosen algorithm.
+func NewSymmetricEncryptor(opts ...SymmetricEncryptorOption) (*SymmetricEncryptor, error) {
+	se := &SymmetricEncryptor{
 		contentAlg:  AES256GCM,
 		contentType: pkiasn1.OIDData,
 		maxSize:     DefaultMaxAttachedSize,
 	}
-}
-
-// WithKey sets the symmetric content encryption key. Must be 16 bytes (AES-128)
-// or 32 bytes (AES-256) — the exact length depends on WithContentEncryption.
-// Required.
-func (se *SymmetricEncryptor) WithKey(key []byte) *SymmetricEncryptor {
-	if len(key) == 0 {
-		se.errs = append(se.errs, newConfigError("key must not be empty"))
-		return se
+	var errs []error
+	for _, opt := range opts {
+		if err := opt.applySymmetricEncryptor(se); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	se.key = key
-	return se
-}
-
-// WithContentEncryption sets the symmetric cipher. Defaults to AES256GCM.
-// The key length must match: 16 bytes for AES-128, 32 bytes for AES-256.
-func (se *SymmetricEncryptor) WithContentEncryption(alg ContentEncryptionAlgorithm) *SymmetricEncryptor {
-	se.contentAlg = alg
-	return se
-}
-
-// WithContentType sets a custom content type OID in EncryptedContentInfo.
-// Default is id-data.
-func (se *SymmetricEncryptor) WithContentType(oid asn1.ObjectIdentifier) *SymmetricEncryptor {
-	if len(oid) == 0 {
-		se.errs = append(se.errs, newConfigError("content type OID is empty"))
-		return se
+	if len(se.key) == 0 && len(errs) == 0 {
+		errs = append(errs, newConfigError("key is required"))
+	} else if len(se.key) > 0 {
+		if err := validateSymKey(se.key, se.contentAlg); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	se.contentType = oid
-	return se
-}
-
-// WithMaxContentSize sets the maximum content size in bytes. Defaults to
-// DefaultMaxAttachedSize (64 MiB). Pass UnlimitedAttachedSize to disable.
-func (se *SymmetricEncryptor) WithMaxContentSize(maxBytes int64) *SymmetricEncryptor {
-	se.maxSize = maxBytes
-	return se
+	if err := joinErrors(errs); err != nil {
+		return nil, err
+	}
+	return se, nil
 }
 
 // Encrypt reads plaintext from r, encrypts it with the configured key and
 // algorithm, and returns the DER-encoded ContentInfo wrapping EncryptedData.
-// All builder configuration errors are reported here.
 func (se *SymmetricEncryptor) Encrypt(r io.Reader) ([]byte, error) {
-	if err := se.validate(); err != nil {
-		return nil, err
-	}
-
 	content, err := se.readContent(r)
 	if err != nil {
 		return nil, err
@@ -103,21 +76,6 @@ func (se *SymmetricEncryptor) Encrypt(r io.Reader) ([]byte, error) {
 	}
 
 	return marshalEncryptedDataCI(&ed)
-}
-
-// validate checks that all accumulated configuration errors are nil and that
-// the key is present with the correct length for the chosen algorithm.
-func (se *SymmetricEncryptor) validate() error {
-	var errs []error
-	errs = append(errs, se.errs...)
-	if se.key == nil && len(se.errs) == 0 {
-		errs = append(errs, newConfigError("key is required"))
-	} else if se.key != nil {
-		if err := validateSymKey(se.key, se.contentAlg); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return joinErrors(errs)
 }
 
 // readContent reads all content from r, enforcing the size limit.

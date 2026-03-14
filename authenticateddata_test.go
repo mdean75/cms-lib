@@ -29,10 +29,10 @@ func TestAuthenticate_RSA_RoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			der, err := NewAuthenticator().
-				WithRecipient(cert).
-				WithMACAlgorithm(tt.alg).
-				Authenticate(FromBytes(plaintext))
+			a, err := NewAuthenticator(WithRecipient(cert), WithMACAlgorithm(tt.alg))
+			require.NoError(t, err)
+
+			der, err := a.Authenticate(FromBytes(plaintext))
 			require.NoError(t, err)
 			require.NotEmpty(t, der)
 
@@ -67,9 +67,10 @@ func TestAuthenticate_ECDH_RoundTrip(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cert, key := generateSelfSignedECDSA(t, tt.curve)
 
-			der, err := NewAuthenticator().
-				WithRecipient(cert).
-				Authenticate(FromBytes(plaintext))
+			a, err := NewAuthenticator(WithRecipient(cert))
+			require.NoError(t, err)
+
+			der, err := a.Authenticate(FromBytes(plaintext))
 			require.NoError(t, err)
 			require.NotEmpty(t, der)
 
@@ -88,10 +89,10 @@ func TestAuthenticate_MultiRecipient(t *testing.T) {
 	ecCert, ecKey := generateSelfSignedECDSA(t, elliptic.P256())
 	plaintext := []byte("multi-recipient authenticated content")
 
-	der, err := NewAuthenticator().
-		WithRecipient(rsaCert).
-		WithRecipient(ecCert).
-		Authenticate(FromBytes(plaintext))
+	a, err := NewAuthenticator(WithRecipient(rsaCert), WithRecipient(ecCert))
+	require.NoError(t, err)
+
+	der, err := a.Authenticate(FromBytes(plaintext))
 	require.NoError(t, err)
 
 	parsed, err := ParseAuthenticatedData(FromBytes(der))
@@ -108,9 +109,10 @@ func TestAuthenticate_WrongKey(t *testing.T) {
 	// A completely different cert/key pair — not added as a recipient.
 	wrongCert, wrongKey := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewAuthenticator().
-		WithRecipient(cert).
-		Authenticate(FromBytes([]byte("content")))
+	a, err := NewAuthenticator(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := a.Authenticate(FromBytes([]byte("content")))
 	require.NoError(t, err)
 
 	parsed, err := ParseAuthenticatedData(FromBytes(der))
@@ -125,9 +127,10 @@ func TestAuthenticate_WrongKey(t *testing.T) {
 func TestAuthenticate_TamperedMAC(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewAuthenticator().
-		WithRecipient(cert).
-		Authenticate(FromBytes([]byte("original content")))
+	a, err := NewAuthenticator(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := a.Authenticate(FromBytes([]byte("original content")))
 	require.NoError(t, err)
 
 	// Flip the last byte of the DER to corrupt the MAC.
@@ -150,9 +153,10 @@ func TestAuthenticate_TamperedMAC(t *testing.T) {
 func TestAuthenticate_TamperedContent(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewAuthenticator().
-		WithRecipient(cert).
-		Authenticate(FromBytes([]byte("original content")))
+	a, err := NewAuthenticator(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := a.Authenticate(FromBytes([]byte("original content")))
 	require.NoError(t, err)
 
 	// Re-parse so we can manipulate the struct.
@@ -182,9 +186,10 @@ func TestAuthenticate_TamperedContent(t *testing.T) {
 func TestAuthenticate_EmptyContent(t *testing.T) {
 	cert, key := generateSelfSignedRSA(t, 2048)
 
-	der, err := NewAuthenticator().
-		WithRecipient(cert).
-		Authenticate(FromBytes([]byte{}))
+	a, err := NewAuthenticator(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := a.Authenticate(FromBytes([]byte{}))
 	require.NoError(t, err)
 
 	parsed, err := ParseAuthenticatedData(FromBytes(der))
@@ -205,26 +210,24 @@ func TestAuthenticate_PayloadTooLarge(t *testing.T) {
 	cert, _ := generateSelfSignedRSA(t, 2048)
 	content := bytes.Repeat([]byte("A"), 100)
 
-	_, err := NewAuthenticator().
-		WithRecipient(cert).
-		WithMaxContentSize(50).
-		Authenticate(FromBytes(content))
+	a, err := NewAuthenticator(WithRecipient(cert), WithMaxContentSize(50))
+	require.NoError(t, err)
+
+	_, err = a.Authenticate(FromBytes(content))
 	require.ErrorIs(t, err, ErrPayloadTooLarge)
 }
 
-// TestAuthenticate_NoRecipients verifies that Authenticate returns
+// TestAuthenticate_NoRecipients verifies that NewAuthenticator returns
 // ErrInvalidConfiguration when no recipients are configured.
 func TestAuthenticate_NoRecipients(t *testing.T) {
-	_, err := NewAuthenticator().Authenticate(FromBytes([]byte("content")))
+	_, err := NewAuthenticator()
 	require.ErrorIs(t, err, ErrInvalidConfiguration)
 }
 
-// TestAuthenticate_NilCert verifies that WithRecipient(nil) accumulates a
-// configuration error reported at Authenticate time.
+// TestAuthenticate_NilCert verifies that WithRecipient(nil) returns a
+// configuration error from NewAuthenticator.
 func TestAuthenticate_NilCert(t *testing.T) {
-	_, err := NewAuthenticator().
-		WithRecipient(nil).
-		Authenticate(FromBytes([]byte("content")))
+	_, err := NewAuthenticator(WithRecipient(nil))
 	require.ErrorIs(t, err, ErrInvalidConfiguration)
 }
 
@@ -233,9 +236,7 @@ func TestAuthenticate_NilCert(t *testing.T) {
 func TestAuthenticate_UnsupportedKeyType(t *testing.T) {
 	edCert, _ := generateSelfSignedEd25519(t)
 
-	_, err := NewAuthenticator().
-		WithRecipient(edCert).
-		Authenticate(FromBytes([]byte("content")))
+	_, err := NewAuthenticator(WithRecipient(edCert))
 	require.ErrorIs(t, err, ErrUnsupportedAlgorithm)
 }
 
@@ -259,10 +260,10 @@ func TestAuthenticate_CustomContentType(t *testing.T) {
 	customOID := pkiasn1.OIDSignedData // arbitrary non-id-data OID
 	content := []byte("custom type content")
 
-	der, err := NewAuthenticator().
-		WithRecipient(cert).
-		WithContentType(customOID).
-		Authenticate(FromBytes(content))
+	a, err := NewAuthenticator(WithRecipient(cert), WithContentType(customOID))
+	require.NoError(t, err)
+
+	der, err := a.Authenticate(FromBytes(content))
 	require.NoError(t, err)
 
 	parsed, err := ParseAuthenticatedData(FromBytes(der))
@@ -281,9 +282,10 @@ func TestAuthenticate_CustomContentType(t *testing.T) {
 func TestAuthenticate_ECDHVersion(t *testing.T) {
 	cert, key := generateSelfSignedECDSA(t, elliptic.P256())
 
-	der, err := NewAuthenticator().
-		WithRecipient(cert).
-		Authenticate(FromBytes([]byte("content")))
+	a, err := NewAuthenticator(WithRecipient(cert))
+	require.NoError(t, err)
+
+	der, err := a.Authenticate(FromBytes([]byte("content")))
 	require.NoError(t, err)
 
 	parsed, err := ParseAuthenticatedData(FromBytes(der))
@@ -295,15 +297,11 @@ func TestAuthenticate_ECDHVersion(t *testing.T) {
 	require.NoError(t, parsed.VerifyMAC(key, cert))
 }
 
-// TestAuthenticate_EmptyOID verifies that WithContentType(empty) accumulates a
-// configuration error.
+// TestAuthenticate_EmptyOID verifies that WithContentType(empty) returns a
+// configuration error from NewAuthenticator.
 func TestAuthenticate_EmptyOID(t *testing.T) {
 	cert, _ := generateSelfSignedRSA(t, 2048)
 
-	_, err := NewAuthenticator().
-		WithRecipient(cert).
-		WithContentType(asn1.ObjectIdentifier{}).
-		Authenticate(FromBytes([]byte("content")))
+	_, err := NewAuthenticator(WithRecipient(cert), WithContentType(asn1.ObjectIdentifier{}))
 	require.ErrorIs(t, err, ErrInvalidConfiguration)
 }
-

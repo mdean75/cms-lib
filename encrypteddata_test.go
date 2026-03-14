@@ -29,10 +29,10 @@ func TestSymmetricEncrypt_RoundTrip(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			key := bytes.Repeat([]byte{0x42}, tt.keyLen)
 
-			der, err := NewSymmetricEncryptor().
-				WithKey(key).
-				WithContentEncryption(tt.alg).
-				Encrypt(FromBytes(tt.content))
+			se, err := NewSymmetricEncryptor(WithKey(key), WithContentEncryption(tt.alg))
+			require.NoError(t, err)
+
+			der, err := se.Encrypt(FromBytes(tt.content))
 			require.NoError(t, err)
 
 			p, err := ParseEncryptedData(FromBytes(der))
@@ -52,9 +52,10 @@ func TestSymmetricEncrypt_WrongKey(t *testing.T) {
 	wrongKey := bytes.Repeat([]byte{0x02}, 32)
 	content := []byte("secret content")
 
-	der, err := NewSymmetricEncryptor().
-		WithKey(key).
-		Encrypt(FromBytes(content))
+	se, err := NewSymmetricEncryptor(WithKey(key))
+	require.NoError(t, err)
+
+	der, err := se.Encrypt(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseEncryptedData(FromBytes(der))
@@ -72,9 +73,10 @@ func TestSymmetricEncrypt_WrongKeyLength(t *testing.T) {
 	content := []byte("content")
 
 	// Encrypt with AES-256-GCM (expects 32-byte key).
-	der, err := NewSymmetricEncryptor().
-		WithKey(key32).
-		Encrypt(FromBytes(content))
+	se, err := NewSymmetricEncryptor(WithKey(key32))
+	require.NoError(t, err)
+
+	der, err := se.Encrypt(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseEncryptedData(FromBytes(der))
@@ -85,10 +87,10 @@ func TestSymmetricEncrypt_WrongKeyLength(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidConfiguration)
 }
 
-// TestSymmetricEncrypt_NilKey verifies that Encrypt returns ErrInvalidConfiguration
-// when no key is provided.
+// TestSymmetricEncrypt_NilKey verifies that NewSymmetricEncryptor returns
+// ErrInvalidConfiguration when no key is provided.
 func TestSymmetricEncrypt_NilKey(t *testing.T) {
-	_, err := NewSymmetricEncryptor().Encrypt(FromBytes([]byte("content")))
+	_, err := NewSymmetricEncryptor()
 	require.ErrorIs(t, err, ErrInvalidConfiguration)
 }
 
@@ -97,9 +99,10 @@ func TestSymmetricEncrypt_NilKey(t *testing.T) {
 func TestSymmetricEncrypt_EmptyContent(t *testing.T) {
 	key := bytes.Repeat([]byte{0xAA}, 32)
 
-	der, err := NewSymmetricEncryptor().
-		WithKey(key).
-		Encrypt(FromBytes([]byte{}))
+	se, err := NewSymmetricEncryptor(WithKey(key))
+	require.NoError(t, err)
+
+	der, err := se.Encrypt(FromBytes([]byte{}))
 	require.NoError(t, err)
 
 	p, err := ParseEncryptedData(FromBytes(der))
@@ -116,10 +119,10 @@ func TestSymmetricEncrypt_PayloadTooLarge(t *testing.T) {
 	key := bytes.Repeat([]byte{0x01}, 32)
 	content := bytes.Repeat([]byte("A"), 100)
 
-	_, err := NewSymmetricEncryptor().
-		WithKey(key).
-		WithMaxContentSize(50).
-		Encrypt(FromBytes(content))
+	se, err := NewSymmetricEncryptor(WithKey(key), WithMaxContentSize(50))
+	require.NoError(t, err)
+
+	_, err = se.Encrypt(FromBytes(content))
 	require.ErrorIs(t, err, ErrPayloadTooLarge)
 }
 
@@ -136,17 +139,14 @@ func TestSymmetricEncrypt_ParseWrongContentType(t *testing.T) {
 	require.ErrorIs(t, err, ErrParse)
 }
 
-// TestSymmetricEncrypt_KeyLengthMismatchBuilder verifies that the builder
+// TestSymmetricEncrypt_KeyLengthMismatchBuilder verifies that NewSymmetricEncryptor
 // returns ErrInvalidConfiguration when the key length does not match the
 // configured algorithm.
 func TestSymmetricEncrypt_KeyLengthMismatchBuilder(t *testing.T) {
 	// 16-byte key with AES-256-GCM (needs 32 bytes).
 	key16 := bytes.Repeat([]byte{0x01}, 16)
 
-	_, err := NewSymmetricEncryptor().
-		WithKey(key16).
-		WithContentEncryption(AES256GCM).
-		Encrypt(FromBytes([]byte("content")))
+	_, err := NewSymmetricEncryptor(WithKey(key16), WithContentEncryption(AES256GCM))
 	require.ErrorIs(t, err, ErrInvalidConfiguration)
 }
 
@@ -157,10 +157,10 @@ func TestSymmetricEncrypt_CustomContentType(t *testing.T) {
 	content := []byte("custom type content")
 	customOID := pkiasn1.OIDSignedData // arbitrary non-id-data OID
 
-	der, err := NewSymmetricEncryptor().
-		WithKey(key).
-		WithContentType(customOID).
-		Encrypt(FromBytes(content))
+	se, err := NewSymmetricEncryptor(WithKey(key), WithContentType(customOID))
+	require.NoError(t, err)
+
+	der, err := se.Encrypt(FromBytes(content))
 	require.NoError(t, err)
 
 	p, err := ParseEncryptedData(FromBytes(der))
@@ -175,24 +175,19 @@ func TestSymmetricEncrypt_CustomContentType(t *testing.T) {
 }
 
 // TestSymmetricEncrypt_BuilderEmptyOID verifies that an empty content type OID
-// accumulates a configuration error.
+// returns a configuration error from NewSymmetricEncryptor.
 func TestSymmetricEncrypt_BuilderEmptyOID(t *testing.T) {
 	key := bytes.Repeat([]byte{0x01}, 32)
 
-	_, err := NewSymmetricEncryptor().
-		WithKey(key).
-		WithContentType(asn1.ObjectIdentifier{}).
-		Encrypt(FromBytes([]byte("content")))
+	_, err := NewSymmetricEncryptor(WithKey(key), WithContentType(asn1.ObjectIdentifier{}))
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrInvalidConfiguration),
 		"expected ErrInvalidConfiguration, got: %v", err)
 }
 
-// TestSymmetricEncrypt_WithKeyNilAccumulates verifies that WithKey(nil) accumulates
-// a configuration error that is reported at Encrypt time.
+// TestSymmetricEncrypt_WithKeyNilAccumulates verifies that WithKey(nil) returns
+// a configuration error from NewSymmetricEncryptor.
 func TestSymmetricEncrypt_WithKeyNilAccumulates(t *testing.T) {
-	_, err := NewSymmetricEncryptor().
-		WithKey(nil).
-		Encrypt(FromBytes([]byte("content")))
+	_, err := NewSymmetricEncryptor(WithKey(nil))
 	require.ErrorIs(t, err, ErrInvalidConfiguration)
 }

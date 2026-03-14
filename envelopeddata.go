@@ -45,70 +45,41 @@ const (
 const gcmNonceSize = 12
 
 
-// Encryptor builds a CMS EnvelopedData message using a fluent builder API.
-// Builder methods accumulate configuration and errors; Encrypt reports all
-// configuration errors at once. Encryptor methods are not safe for concurrent
-// use; Encrypt is safe for concurrent use once the builder is fully configured.
+// Encryptor builds a CMS EnvelopedData message. Configure it with functional
+// options passed to NewEncryptor. Encrypt is safe for concurrent use once
+// constructed.
 type Encryptor struct {
 	recipients []*x509.Certificate
 	contentAlg ContentEncryptionAlgorithm
 	maxSize    int64
-	errs       []error
 }
 
-// NewEncryptor returns a new Encryptor with default settings:
-//   - AES-256-GCM content encryption
-//   - 64 MiB content size limit
-func NewEncryptor() *Encryptor {
-	return &Encryptor{
+// NewEncryptor returns a new Encryptor configured with opts and validates the
+// configuration immediately. Returns an error if any option is invalid or if
+// no recipient is provided.
+func NewEncryptor(opts ...EncryptorOption) (*Encryptor, error) {
+	e := &Encryptor{
 		contentAlg: AES256GCM,
 		maxSize:    DefaultMaxAttachedSize,
 	}
-}
-
-// WithRecipient adds a recipient certificate. The key transport or key
-// agreement algorithm is auto-selected from the certificate's public key type:
-// RSA keys use RSA-OAEP; EC keys use ECDH ephemeral-static. At least one
-// recipient is required before calling Encrypt.
-func (e *Encryptor) WithRecipient(cert *x509.Certificate) *Encryptor {
-	if cert == nil {
-		e.errs = append(e.errs, newConfigError("recipient certificate is nil"))
-		return e
+	var errs []error
+	for _, opt := range opts {
+		if err := opt.applyEncryptor(e); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	switch cert.PublicKey.(type) {
-	case *rsa.PublicKey, *ecdsa.PublicKey:
-		// supported
-	default:
-		e.errs = append(e.errs, newError(CodeUnsupportedAlgorithm,
-			fmt.Sprintf("unsupported recipient public key type %T", cert.PublicKey)))
-		return e
+	if len(e.recipients) == 0 && len(errs) == 0 {
+		errs = append(errs, newConfigError("at least one recipient is required"))
 	}
-	e.recipients = append(e.recipients, cert)
-	return e
-}
-
-// WithContentEncryption sets the symmetric cipher for content encryption.
-// Defaults to AES256GCM.
-func (e *Encryptor) WithContentEncryption(alg ContentEncryptionAlgorithm) *Encryptor {
-	e.contentAlg = alg
-	return e
-}
-
-// WithMaxContentSize sets the maximum content size in bytes. Defaults to
-// DefaultMaxAttachedSize (64 MiB). Pass UnlimitedAttachedSize to disable.
-func (e *Encryptor) WithMaxContentSize(maxBytes int64) *Encryptor {
-	e.maxSize = maxBytes
-	return e
+	if err := joinErrors(errs); err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
 // Encrypt reads plaintext from r, encrypts it for all configured recipients,
 // and returns the DER-encoded CMS ContentInfo wrapping EnvelopedData.
-// All builder configuration errors are reported here.
 func (e *Encryptor) Encrypt(r io.Reader) ([]byte, error) {
-	if err := e.validate(); err != nil {
-		return nil, err
-	}
-
 	plaintext, err := e.readContent(r)
 	if err != nil {
 		return nil, err
@@ -159,16 +130,6 @@ func (e *Encryptor) Encrypt(r io.Reader) ([]byte, error) {
 	}
 
 	return marshalEnvelopedDataCI(&ed)
-}
-
-// validate checks builder state and returns a joined error for all problems.
-func (e *Encryptor) validate() error {
-	var errs []error
-	errs = append(errs, e.errs...)
-	if len(e.recipients) == 0 && len(e.errs) == 0 {
-		errs = append(errs, newConfigError("at least one recipient is required"))
-	}
-	return joinErrors(errs)
 }
 
 // readContent reads r up to maxSize bytes.

@@ -216,20 +216,16 @@ func addNullParams(sd *pkiasn1.SignedData) {
 
 // genRSAOAEPEnveloped encrypts content for the RSA recipient using AES-256-CBC.
 func genRSAOAEPEnveloped(recipCert *x509.Certificate, content []byte, path string) {
-	der, err := cms.NewEncryptor().
-		WithRecipient(recipCert).
-		WithContentEncryption(cms.AES256CBC).
-		Encrypt(bytes.NewReader(content))
+	enc := must2(cms.NewEncryptor(cms.WithRecipient(recipCert), cms.WithContentEncryption(cms.AES256CBC)))
+	der, err := enc.Encrypt(bytes.NewReader(content))
 	must(err)
 	write(path, der)
 }
 
 // genECDHEnveloped encrypts content for the ECDH P-256 recipient using AES-256-CBC.
 func genECDHEnveloped(recipCert *x509.Certificate, content []byte, path string) {
-	der, err := cms.NewEncryptor().
-		WithRecipient(recipCert).
-		WithContentEncryption(cms.AES256CBC).
-		Encrypt(bytes.NewReader(content))
+	enc := must2(cms.NewEncryptor(cms.WithRecipient(recipCert), cms.WithContentEncryption(cms.AES256CBC)))
+	der, err := enc.Encrypt(bytes.NewReader(content))
 	must(err)
 	write(path, der)
 }

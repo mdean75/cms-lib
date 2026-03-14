@@ -2,6 +2,8 @@ package cms
 
 import (
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/asn1"
 	"fmt"
@@ -9,6 +11,8 @@ import (
 
 	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
+
+// --- Option interfaces for Signer and CounterSigner ---
 
 // SignerOption configures a Signer. Options that apply only to Signer (not
 // CounterSigner) implement this interface. Pass them to NewSigner.
@@ -24,6 +28,74 @@ type SigningOption interface {
 	SignerOption
 	applyToCounterSigner(*CounterSigner) error
 }
+
+// --- Option interfaces for Encryptor, SymmetricEncryptor, Digester, Authenticator ---
+
+// EncryptorOption configures an Encryptor. Pass to NewEncryptor.
+type EncryptorOption interface {
+	applyEncryptor(*Encryptor) error
+}
+
+// SymmetricEncryptorOption configures a SymmetricEncryptor. Pass to NewSymmetricEncryptor.
+type SymmetricEncryptorOption interface {
+	applySymmetricEncryptor(*SymmetricEncryptor) error
+}
+
+// DigesterOption configures a Digester. Pass to NewDigester.
+type DigesterOption interface {
+	applyDigester(*Digester) error
+}
+
+// AuthenticatorOption configures an Authenticator. Pass to NewAuthenticator.
+type AuthenticatorOption interface {
+	applyAuthenticator(*Authenticator) error
+}
+
+// --- Combined option interfaces ---
+
+// HashOption applies to NewSigner, NewCounterSigner, and NewDigester.
+type HashOption interface {
+	SigningOption
+	DigesterOption
+}
+
+// DetachedOption applies to NewSigner and NewDigester.
+type DetachedOption interface {
+	SignerOption
+	DigesterOption
+}
+
+// ContentTypeOption applies to NewSigner, NewSymmetricEncryptor, NewDigester,
+// and NewAuthenticator.
+type ContentTypeOption interface {
+	SignerOption
+	SymmetricEncryptorOption
+	DigesterOption
+	AuthenticatorOption
+}
+
+// RecipientOption applies to NewEncryptor and NewAuthenticator.
+type RecipientOption interface {
+	EncryptorOption
+	AuthenticatorOption
+}
+
+// ContentEncryptionOption applies to NewEncryptor and NewSymmetricEncryptor.
+type ContentEncryptionOption interface {
+	EncryptorOption
+	SymmetricEncryptorOption
+}
+
+// ContentSizeOption applies to NewEncryptor, NewSymmetricEncryptor, NewDigester,
+// and NewAuthenticator.
+type ContentSizeOption interface {
+	EncryptorOption
+	SymmetricEncryptorOption
+	DigesterOption
+	AuthenticatorOption
+}
+
+// --- Concrete types for Signer/CounterSigner options ---
 
 // signerOption is a concrete SignerOption backed by a single function.
 type signerOption struct {
@@ -49,15 +121,171 @@ func (o *signingOption) applyToCounterSigner(cs *CounterSigner) error {
 	return o.counterFn(cs)
 }
 
+// --- Concrete types for combined options ---
+
+// hashOpt implements HashOption (SigningOption + DigesterOption).
+type hashOpt struct{ h crypto.Hash }
+
+func (o *hashOpt) applyToSigner(s *Signer) error {
+	s.hash = o.h
+	s.hashExplicit = true
+	return nil
+}
+
+func (o *hashOpt) applyToCounterSigner(cs *CounterSigner) error {
+	cs.hash = o.h
+	cs.hashExplicit = true
+	return nil
+}
+
+func (o *hashOpt) applyDigester(d *Digester) error {
+	d.hash = o.h
+	return nil
+}
+
+// detachedOpt implements DetachedOption (SignerOption + DigesterOption).
+type detachedOpt struct{}
+
+func (o *detachedOpt) applyToSigner(s *Signer) error {
+	s.detached = true
+	return nil
+}
+
+func (o *detachedOpt) applyDigester(d *Digester) error {
+	d.detached = true
+	return nil
+}
+
+// contentTypeOpt implements ContentTypeOption.
+type contentTypeOpt struct{ oid asn1.ObjectIdentifier }
+
+func (o *contentTypeOpt) applyToSigner(s *Signer) error {
+	if len(o.oid) == 0 {
+		return newConfigError("content type OID is empty")
+	}
+	s.contentType = o.oid
+	return nil
+}
+
+func (o *contentTypeOpt) applySymmetricEncryptor(se *SymmetricEncryptor) error {
+	if len(o.oid) == 0 {
+		return newConfigError("content type OID is empty")
+	}
+	se.contentType = o.oid
+	return nil
+}
+
+func (o *contentTypeOpt) applyDigester(d *Digester) error {
+	if len(o.oid) == 0 {
+		return newConfigError("content type OID is empty")
+	}
+	d.contentType = o.oid
+	return nil
+}
+
+func (o *contentTypeOpt) applyAuthenticator(a *Authenticator) error {
+	if len(o.oid) == 0 {
+		return newConfigError("content type OID is empty")
+	}
+	a.contentType = o.oid
+	return nil
+}
+
+// recipientOpt implements RecipientOption (EncryptorOption + AuthenticatorOption).
+type recipientOpt struct{ cert *x509.Certificate }
+
+func (o *recipientOpt) applyEncryptor(e *Encryptor) error {
+	if o.cert == nil {
+		return newConfigError("recipient certificate is nil")
+	}
+	switch o.cert.PublicKey.(type) {
+	case *rsa.PublicKey, *ecdsa.PublicKey:
+		// supported
+	default:
+		return newError(CodeUnsupportedAlgorithm,
+			fmt.Sprintf("unsupported recipient public key type %T", o.cert.PublicKey))
+	}
+	e.recipients = append(e.recipients, o.cert)
+	return nil
+}
+
+func (o *recipientOpt) applyAuthenticator(a *Authenticator) error {
+	if o.cert == nil {
+		return newConfigError("recipient certificate is nil")
+	}
+	switch o.cert.PublicKey.(type) {
+	case *rsa.PublicKey, *ecdsa.PublicKey:
+		// supported
+	default:
+		return newError(CodeUnsupportedAlgorithm,
+			fmt.Sprintf("unsupported recipient public key type %T", o.cert.PublicKey))
+	}
+	a.recipients = append(a.recipients, o.cert)
+	return nil
+}
+
+// contentEncryptionOpt implements ContentEncryptionOption.
+type contentEncryptionOpt struct{ alg ContentEncryptionAlgorithm }
+
+func (o *contentEncryptionOpt) applyEncryptor(e *Encryptor) error {
+	e.contentAlg = o.alg
+	return nil
+}
+
+func (o *contentEncryptionOpt) applySymmetricEncryptor(se *SymmetricEncryptor) error {
+	se.contentAlg = o.alg
+	return nil
+}
+
+// keyOpt implements SymmetricEncryptorOption.
+type keyOpt struct{ key []byte }
+
+func (o *keyOpt) applySymmetricEncryptor(se *SymmetricEncryptor) error {
+	if len(o.key) == 0 {
+		return newConfigError("key must not be empty")
+	}
+	se.key = o.key
+	return nil
+}
+
+// macAlgOpt implements AuthenticatorOption.
+type macAlgOpt struct{ alg MACAlgorithm }
+
+func (o *macAlgOpt) applyAuthenticator(a *Authenticator) error {
+	a.macAlg = o.alg
+	return nil
+}
+
+// contentSizeOpt implements ContentSizeOption.
+type contentSizeOpt struct{ maxBytes int64 }
+
+func (o *contentSizeOpt) applyEncryptor(e *Encryptor) error {
+	e.maxSize = o.maxBytes
+	return nil
+}
+
+func (o *contentSizeOpt) applySymmetricEncryptor(se *SymmetricEncryptor) error {
+	se.maxSize = o.maxBytes
+	return nil
+}
+
+func (o *contentSizeOpt) applyDigester(d *Digester) error {
+	d.maxSize = o.maxBytes
+	return nil
+}
+
+func (o *contentSizeOpt) applyAuthenticator(a *Authenticator) error {
+	a.maxSize = o.maxBytes
+	return nil
+}
+
 // --- Options returning SigningOption (accepted by both NewSigner and NewCounterSigner) ---
 
 // WithHash sets the digest algorithm. For Ed25519, the library always uses
 // SHA-512 per RFC 8419 regardless of this setting. Defaults to SHA-256.
-func WithHash(h crypto.Hash) SigningOption {
-	return &signingOption{
-		signerFn:  func(s *Signer) error { s.hash = h; s.hashExplicit = true; return nil },
-		counterFn: func(cs *CounterSigner) error { cs.hash = h; cs.hashExplicit = true; return nil },
-	}
+// Also accepted by NewDigester.
+func WithHash(h crypto.Hash) HashOption {
+	return &hashOpt{h: h}
 }
 
 // WithRSAPKCS1 selects RSA PKCS1v15 as the signature algorithm. By default,
@@ -137,25 +365,17 @@ func AddCertificateChain(certs ...*x509.Certificate) SigningOption {
 
 // --- Options returning SignerOption (accepted by NewSigner only) ---
 
-// WithDetachedContent produces a detached signature (eContent absent in output).
-// Detached mode streams content without buffering it; the size limit has no effect.
-func WithDetachedContent() SignerOption {
-	return &signerOption{f: func(s *Signer) error {
-		s.detached = true
-		return nil
-	}}
+// WithDetachedContent produces a detached signature or digest (eContent absent
+// in output). Also accepted by NewDigester.
+func WithDetachedContent() DetachedOption {
+	return &detachedOpt{}
 }
 
 // WithContentType sets a custom eContentType OID. Default is id-data.
 // A non-id-data type forces SignedData version 3 per RFC 5652 §5.1.
-func WithContentType(oid asn1.ObjectIdentifier) SignerOption {
-	return &signerOption{f: func(s *Signer) error {
-		if len(oid) == 0 {
-			return newConfigError("content type OID is empty")
-		}
-		s.contentType = oid
-		return nil
-	}}
+// Also accepted by NewSymmetricEncryptor, NewDigester, and NewAuthenticator.
+func WithContentType(oid asn1.ObjectIdentifier) ContentTypeOption {
+	return &contentTypeOpt{oid: oid}
 }
 
 // WithMaxAttachedContentSize sets the maximum content size for attached signatures.
@@ -281,4 +501,38 @@ func WithoutCertificates() SignerOption {
 		s.noCerts = true
 		return nil
 	}}
+}
+
+// --- Options for Encryptor, SymmetricEncryptor, Digester, Authenticator ---
+
+// WithRecipient adds a recipient certificate for key delivery. Auto-selects
+// RSA-OAEP (RSA key) or ECDH ephemeral-static (EC key). At least one recipient
+// is required for NewEncryptor and NewAuthenticator.
+func WithRecipient(cert *x509.Certificate) RecipientOption {
+	return &recipientOpt{cert: cert}
+}
+
+// WithContentEncryption sets the symmetric cipher for content encryption.
+// Applies to NewEncryptor and NewSymmetricEncryptor. Defaults to AES256GCM.
+func WithContentEncryption(alg ContentEncryptionAlgorithm) ContentEncryptionOption {
+	return &contentEncryptionOpt{alg: alg}
+}
+
+// WithKey sets the symmetric content encryption key for NewSymmetricEncryptor.
+// Must be 16 bytes (AES-128) or 32 bytes (AES-256). Required.
+func WithKey(key []byte) SymmetricEncryptorOption {
+	return &keyOpt{key: key}
+}
+
+// WithMACAlgorithm sets the HMAC algorithm for NewAuthenticator.
+// Defaults to HMACSHA256.
+func WithMACAlgorithm(alg MACAlgorithm) AuthenticatorOption {
+	return &macAlgOpt{alg: alg}
+}
+
+// WithMaxContentSize sets the maximum content size in bytes for NewEncryptor,
+// NewSymmetricEncryptor, NewDigester, and NewAuthenticator. Defaults to
+// DefaultMaxAttachedSize (64 MiB). Pass UnlimitedAttachedSize to disable.
+func WithMaxContentSize(maxBytes int64) ContentSizeOption {
+	return &contentSizeOpt{maxBytes: maxBytes}
 }

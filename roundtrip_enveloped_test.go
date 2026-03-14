@@ -55,10 +55,9 @@ func TestRoundTrip_EnvelopedData_LibraryOutputDecryptedByOpenSSL(t *testing.T) {
 			skipIfNoGCM: true,
 			encrypt: func(t *testing.T) []byte {
 				t.Helper()
-				der, err := NewEncryptor().
-					WithRecipient(rsaRecipCert).
-					WithContentEncryption(AES256GCM).
-					Encrypt(bytes.NewReader(content))
+				enc, err := NewEncryptor(WithRecipient(rsaRecipCert), WithContentEncryption(AES256GCM))
+				require.NoError(t, err)
+				der, err := enc.Encrypt(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},
@@ -69,10 +68,9 @@ func TestRoundTrip_EnvelopedData_LibraryOutputDecryptedByOpenSSL(t *testing.T) {
 			keyPath:  rsaKeyPath,
 			encrypt: func(t *testing.T) []byte {
 				t.Helper()
-				der, err := NewEncryptor().
-					WithRecipient(rsaRecipCert).
-					WithContentEncryption(AES256CBC).
-					Encrypt(bytes.NewReader(content))
+				enc, err := NewEncryptor(WithRecipient(rsaRecipCert), WithContentEncryption(AES256CBC))
+				require.NoError(t, err)
+				der, err := enc.Encrypt(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},
@@ -83,10 +81,9 @@ func TestRoundTrip_EnvelopedData_LibraryOutputDecryptedByOpenSSL(t *testing.T) {
 			keyPath:  rsaKeyPath,
 			encrypt: func(t *testing.T) []byte {
 				t.Helper()
-				der, err := NewEncryptor().
-					WithRecipient(rsaRecipCert).
-					WithContentEncryption(AES128CBC).
-					Encrypt(bytes.NewReader(content))
+				enc, err := NewEncryptor(WithRecipient(rsaRecipCert), WithContentEncryption(AES128CBC))
+				require.NoError(t, err)
+				der, err := enc.Encrypt(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},
@@ -98,10 +95,9 @@ func TestRoundTrip_EnvelopedData_LibraryOutputDecryptedByOpenSSL(t *testing.T) {
 			skipIfNoGCM: true,
 			encrypt: func(t *testing.T) []byte {
 				t.Helper()
-				der, err := NewEncryptor().
-					WithRecipient(ecP256RecipCert).
-					WithContentEncryption(AES256GCM).
-					Encrypt(bytes.NewReader(content))
+				enc, err := NewEncryptor(WithRecipient(ecP256RecipCert), WithContentEncryption(AES256GCM))
+				require.NoError(t, err)
+				der, err := enc.Encrypt(bytes.NewReader(content))
 				require.NoError(t, err)
 				return der
 			},

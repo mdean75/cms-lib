@@ -29,83 +29,45 @@ const (
 	HMACSHA512
 )
 
-// Authenticator builds a CMS AuthenticatedData message using a fluent builder
-// API. The MAC key is generated internally and distributed to recipients using
-// the same RSA-OAEP / ECDH mechanisms as Encryptor. Builder methods accumulate
-// configuration and errors; Authenticate reports all configuration errors at once.
-// Authenticator methods are not safe for concurrent use; Authenticate is safe
-// for concurrent use once the builder is fully configured.
+// Authenticator builds a CMS AuthenticatedData message. The MAC key is
+// generated internally and distributed to recipients using the same RSA-OAEP /
+// ECDH mechanisms as Encryptor. Configure with functional options passed to
+// NewAuthenticator. Authenticate is safe for concurrent use once constructed.
 type Authenticator struct {
 	recipients  []*x509.Certificate
 	macAlg      MACAlgorithm
 	contentType asn1.ObjectIdentifier
 	maxSize     int64
-	errs        []error
 }
 
-// NewAuthenticator returns a new Authenticator with default settings:
-//   - HMAC-SHA256 MAC algorithm
-//   - id-data content type
-//   - 64 MiB content size limit
-func NewAuthenticator() *Authenticator {
-	return &Authenticator{
+// NewAuthenticator returns a new Authenticator configured with opts and
+// validates the configuration immediately. Returns an error if any option is
+// invalid or if no recipient is provided.
+func NewAuthenticator(opts ...AuthenticatorOption) (*Authenticator, error) {
+	a := &Authenticator{
 		macAlg:      HMACSHA256,
 		contentType: pkiasn1.OIDData,
 		maxSize:     DefaultMaxAttachedSize,
 	}
-}
-
-// WithRecipient adds a recipient certificate for MAC key delivery. Auto-selects
-// RSA-OAEP (RSA key) or ECDH ephemeral-static (EC key). At least one recipient
-// is required.
-func (a *Authenticator) WithRecipient(cert *x509.Certificate) *Authenticator {
-	if cert == nil {
-		a.errs = append(a.errs, newConfigError("recipient certificate is nil"))
-		return a
+	var errs []error
+	for _, opt := range opts {
+		if err := opt.applyAuthenticator(a); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	switch cert.PublicKey.(type) {
-	case *rsa.PublicKey, *ecdsa.PublicKey:
-		// supported
-	default:
-		a.errs = append(a.errs, newError(CodeUnsupportedAlgorithm,
-			fmt.Sprintf("unsupported recipient public key type %T", cert.PublicKey)))
-		return a
+	if len(a.recipients) == 0 && len(errs) == 0 {
+		errs = append(errs, newConfigError("at least one recipient is required"))
 	}
-	a.recipients = append(a.recipients, cert)
-	return a
-}
-
-// WithMACAlgorithm sets the HMAC algorithm. Defaults to HMACSHA256.
-func (a *Authenticator) WithMACAlgorithm(alg MACAlgorithm) *Authenticator {
-	a.macAlg = alg
-	return a
-}
-
-// WithContentType sets a custom eContentType OID. Default is id-data.
-func (a *Authenticator) WithContentType(oid asn1.ObjectIdentifier) *Authenticator {
-	if len(oid) == 0 {
-		a.errs = append(a.errs, newConfigError("content type OID is empty"))
-		return a
+	if err := joinErrors(errs); err != nil {
+		return nil, err
 	}
-	a.contentType = oid
-	return a
-}
-
-// WithMaxContentSize sets the maximum content size. Defaults to DefaultMaxAttachedSize.
-func (a *Authenticator) WithMaxContentSize(maxBytes int64) *Authenticator {
-	a.maxSize = maxBytes
-	return a
+	return a, nil
 }
 
 // Authenticate reads content from r, generates a random MAC key, distributes
 // it to all configured recipients, computes the HMAC, and returns the
 // DER-encoded ContentInfo wrapping AuthenticatedData.
-// All builder configuration errors are reported here.
 func (a *Authenticator) Authenticate(r io.Reader) ([]byte, error) {
-	if err := a.validate(); err != nil {
-		return nil, err
-	}
-
 	content, err := a.readContent(r)
 	if err != nil {
 		return nil, err
@@ -179,17 +141,6 @@ func (a *Authenticator) Authenticate(r io.Reader) ([]byte, error) {
 	}
 
 	return marshalAuthenticatedDataCI(&ad)
-}
-
-// validate checks that all accumulated configuration errors are nil and that
-// at least one recipient is configured.
-func (a *Authenticator) validate() error {
-	var errs []error
-	errs = append(errs, a.errs...)
-	if len(a.recipients) == 0 && len(a.errs) == 0 {
-		errs = append(errs, newConfigError("at least one recipient is required"))
-	}
-	return joinErrors(errs)
 }
 
 // readContent reads all content from r, enforcing the size limit.

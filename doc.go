@@ -15,17 +15,11 @@
 //   - [AuthenticatedData]: compute an HMAC over content and deliver the MAC
 //     key to recipients via RSA-OAEP or ECDH.
 //
-// Signer and CounterSigner use a functional options constructor: pass the
-// certificate, private key, and any option values to [NewSigner] or
-// [NewCounterSigner], which validates configuration immediately and returns an
-// error. The returned value is then safe for concurrent calls to Sign or
-// CounterSign.
-//
-// The remaining builders (Encryptor, SymmetricEncryptor, Digester, Authenticator)
-// use a fluent builder pattern: construct with the no-arg NewXxx constructor,
-// chain With* methods to configure, then call the terminal method (Encrypt,
-// Digest, or Authenticate) to produce a DER-encoded ContentInfo. Configuration
-// errors are reported by the terminal method.
+// All six content-type constructors use the functional options pattern: pass
+// options as variadic arguments to NewXxx, which validates configuration
+// immediately and returns an error. The returned value is then safe for
+// concurrent calls to the terminal method (Sign, CounterSign, Encrypt, Digest,
+// or Authenticate), which produces a DER-encoded ContentInfo.
 //
 // The corresponding ParseXxx function returns a parsed result whose Verify or
 // Decrypt method checks the cryptographic output.

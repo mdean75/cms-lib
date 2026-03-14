@@ -10,71 +10,43 @@ import (
 	pkiasn1 "github.com/mdean75/cms-lib/internal/asn1"
 )
 
-// Digester builds a CMS DigestedData message using a fluent builder API.
-// Builder methods accumulate configuration and errors; Digest reports all
-// configuration errors at once. Digester methods are not safe for concurrent
-// use; Digest is safe for concurrent use once the builder is fully configured.
+// Digester builds a CMS DigestedData message. Configure it with functional
+// options passed to NewDigester. Digest is safe for concurrent use once
+// constructed.
 type Digester struct {
 	hash        crypto.Hash
 	contentType asn1.ObjectIdentifier
 	detached    bool
 	maxSize     int64
-	errs        []error
 }
 
-// NewDigester returns a new Digester with default settings:
-//   - SHA-256 digest algorithm
-//   - Attached content
-//   - id-data content type
-//   - 64 MiB content size limit
-func NewDigester() *Digester {
-	return &Digester{
+// NewDigester returns a new Digester configured with opts and validates the
+// configuration immediately. Returns an error if any option is invalid or if
+// the hash algorithm is not supported.
+func NewDigester(opts ...DigesterOption) (*Digester, error) {
+	d := &Digester{
 		hash:        crypto.SHA256,
 		contentType: pkiasn1.OIDData,
 		maxSize:     DefaultMaxAttachedSize,
 	}
-}
-
-// WithHash sets the digest algorithm. Defaults to SHA-256. Must be in the
-// library allow-list (SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-384, SHA3-512).
-func (d *Digester) WithHash(h crypto.Hash) *Digester {
-	d.hash = h
-	return d
-}
-
-// WithContentType sets a custom eContentType OID. Default is id-data.
-// A non-id-data type sets DigestedData version to 2 per RFC 5652 §7.1.
-func (d *Digester) WithContentType(oid asn1.ObjectIdentifier) *Digester {
-	if len(oid) == 0 {
-		d.errs = append(d.errs, newConfigError("content type OID is empty"))
-		return d
+	var errs []error
+	for _, opt := range opts {
+		if err := opt.applyDigester(d); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	d.contentType = oid
-	return d
-}
-
-// WithDetachedContent omits eContent from the output; callers must supply
-// content separately during verification via VerifyDetached.
-func (d *Digester) WithDetachedContent() *Digester {
-	d.detached = true
-	return d
-}
-
-// WithMaxContentSize sets the maximum attached content size. Defaults to
-// DefaultMaxAttachedSize (64 MiB). Pass UnlimitedAttachedSize to disable.
-// Has no effect in detached mode.
-func (d *Digester) WithMaxContentSize(maxBytes int64) *Digester {
-	d.maxSize = maxBytes
-	return d
+	if _, err := newHash(d.hash); err != nil {
+		errs = append(errs, err)
+	}
+	if err := joinErrors(errs); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
 // Digest reads content from r, computes the CMS DigestedData, and returns
-// the DER-encoded ContentInfo. All builder configuration errors are reported here.
+// the DER-encoded ContentInfo.
 func (d *Digester) Digest(r io.Reader) ([]byte, error) {
-	if err := d.validate(); err != nil {
-		return nil, err
-	}
-
 	content, err := d.readContent(r)
 	if err != nil {
 		return nil, err
@@ -112,16 +84,6 @@ func (d *Digester) Digest(r io.Reader) ([]byte, error) {
 	}
 
 	return marshalDigestedDataCI(&dd)
-}
-
-// validate checks that accumulated errors are nil and the hash algorithm is supported.
-func (d *Digester) validate() error {
-	var errs []error
-	errs = append(errs, d.errs...)
-	if _, err := newHash(d.hash); err != nil {
-		errs = append(errs, err)
-	}
-	return joinErrors(errs)
 }
 
 // readContent reads all content from r, enforcing the size limit in attached mode.

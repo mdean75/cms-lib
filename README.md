@@ -29,12 +29,9 @@ go get github.com/mdean75/cms
 
 ### Builders
 
-Use these types to create CMS structures. `Signer` and `CounterSigner` use a
-functional options constructor: pass the certificate, private key, and any options
-to `NewSigner` or `NewCounterSigner`, which validates and returns an error. The
-remaining four builders use a fluent pattern: a no-arg `NewXxx` constructor,
-chainable `With*` methods, and a terminal method that reports any configuration
-errors.
+All six types use the functional options pattern: pass options as variadic
+arguments to `NewXxx`, which validates configuration immediately and returns an
+error. The returned value is then safe for concurrent calls to the terminal method.
 
 | Type | Terminal method | Use when you want to… |
 |---|---|---|
@@ -64,8 +61,12 @@ method to retrieve the payload.
 
 | Type | Used with | Purpose |
 |---|---|---|
-| `SigningOption` | `NewSigner`, `NewCounterSigner` | Options valid for both builders: `WithHash`, `WithRSAPKCS1`, `WithSignerIdentifier`, `AddCertificate` |
-| `SignerOption` | `NewSigner` only | Options exclusive to `Signer`: `WithDetachedContent`, `WithContentType`, `WithTimestamp`, `WithAdditionalSigner`, `AddCRL`, and all `SigningOption` values |
+| `SigningOption` | `NewSigner`, `NewCounterSigner` | `WithHash`, `WithRSAPKCS1`, `WithSignerIdentifier`, `AddCertificate` |
+| `SignerOption` | `NewSigner` only | `WithDetachedContent`, `WithContentType`, `WithTimestamp`, `WithAdditionalSigner`, `AddCRL`, and all `SigningOption` values |
+| `EncryptorOption` | `NewEncryptor` | `WithRecipient`, `WithContentEncryption`, `WithMaxContentSize` |
+| `SymmetricEncryptorOption` | `NewSymmetricEncryptor` | `WithKey`, `WithContentEncryption`, `WithContentType`, `WithMaxContentSize` |
+| `DigesterOption` | `NewDigester` | `WithHash`, `WithDetachedContent`, `WithContentType`, `WithMaxContentSize` |
+| `AuthenticatorOption` | `NewAuthenticator` | `WithRecipient`, `WithMACAlgorithm`, `WithContentType`, `WithMaxContentSize` |
 | `VerifyOption` | `ParsedSignedData.Verify` | Tune chain validation: `WithTrustRoots`, `WithSystemTrustStore`, `WithNoChainValidation`, `WithVerifyTime` |
 | `SignerIdentifierType` | `WithSignerIdentifier(...)` | `IssuerAndSerialNumber` (default) or `SubjectKeyIdentifier` |
 | `ContentEncryptionAlgorithm` | `WithContentEncryption(...)` | `AES256GCM` (default), `AES128GCM`, `AES128CBC`, `AES256CBC` |
@@ -84,8 +85,8 @@ method to retrieve the payload.
 
 ### Sign a message
 
-`NewSigner` returns a builder. Call builder methods to configure, then call `Sign`
-with an `io.Reader` over the content.
+`NewSigner` takes the signing certificate, private key, and any options. Pass the
+returned `*Signer` to `Sign` with an `io.Reader` over the content.
 
 ```go
 import (
@@ -213,9 +214,10 @@ keys, ECDH ephemeral-static for EC keys).
 
 ```go
 // Encrypt for a recipient
-der, err := cms.NewEncryptor().
-    WithRecipient(recipientCert).   // RSA or EC cert; add more for multiple recipients
-    Encrypt(cms.FromBytes(content))
+enc, err := cms.NewEncryptor(cms.WithRecipient(recipientCert))
+if err != nil { ... }
+
+der, err := enc.Encrypt(cms.FromBytes(content))
 
 // Decrypt as the recipient
 ped, err := cms.ParseEnvelopedData(cms.FromBytes(der))
@@ -228,10 +230,10 @@ The default content encryption algorithm is AES-256-GCM. Use
 `WithContentEncryption` to select a different cipher:
 
 ```go
-cms.NewEncryptor().
-    WithRecipient(cert).
-    WithContentEncryption(cms.AES128GCM).
-    Encrypt(r)
+enc, err := cms.NewEncryptor(cms.WithRecipient(cert), cms.WithContentEncryption(cms.AES128GCM))
+if err != nil { ... }
+
+der, err := enc.Encrypt(r)
 ```
 
 Available algorithms: `AES256GCM` (default), `AES128GCM`, `AES128CBC`, `AES256CBC`.
@@ -248,9 +250,10 @@ key := make([]byte, 32) // 32-byte key for AES-256
 if _, err := io.ReadFull(rand.Reader, key); err != nil { ... }
 
 // Encrypt
-der, err := cms.NewSymmetricEncryptor().
-    WithKey(key).
-    Encrypt(cms.FromBytes(content))
+se, err := cms.NewSymmetricEncryptor(cms.WithKey(key))
+if err != nil { ... }
+
+der, err := se.Encrypt(cms.FromBytes(content))
 
 // Decrypt
 ped, err := cms.ParseEncryptedData(cms.FromBytes(der))
@@ -269,8 +272,10 @@ trusts the channel.
 
 ```go
 // Create
-der, err := cms.NewDigester().
-    Digest(cms.FromBytes(content))
+d, err := cms.NewDigester()
+if err != nil { ... }
+
+der, err := d.Digest(cms.FromBytes(content))
 
 // Verify (attached — content is embedded)
 pdd, err := cms.ParseDigestedData(cms.FromBytes(der))
@@ -281,7 +286,11 @@ if err := pdd.Verify(); err != nil { ... }
 r, err := pdd.Content()
 
 // Verify (detached)
-pdd, err := cms.ParseDigestedData(cms.FromBytes(der))
+d, err = cms.NewDigester(cms.WithDetachedContent())
+if err != nil { ... }
+
+der, err = d.Digest(cms.FromBytes(content))
+pdd, err = cms.ParseDigestedData(cms.FromBytes(der))
 err = pdd.VerifyDetached(cms.FromBytes(content))
 ```
 
@@ -294,9 +303,10 @@ for one or more recipients (RSA-OAEP or ECDH, same as `EnvelopedData`).
 
 ```go
 // Authenticate
-der, err := cms.NewAuthenticator().
-    WithRecipient(recipientCert).
-    Authenticate(cms.FromBytes(content))
+a, err := cms.NewAuthenticator(cms.WithRecipient(recipientCert))
+if err != nil { ... }
+
+der, err := a.Authenticate(cms.FromBytes(content))
 
 // Verify
 pad, err := cms.ParseAuthenticatedData(cms.FromBytes(der))
@@ -326,16 +336,13 @@ if errors.Is(err, cms.ErrMissingCertificate) {
 }
 ```
 
-Builder methods do not return errors. Validation failures (missing certificate,
-unsupported key type, etc.) are accumulated and returned together by the terminal
-method (`Sign`, `Encrypt`, `Digest`, `Authenticate`, `CounterSign`):
+Constructors validate configuration immediately. All validation failures are
+reported together by the constructor, before the terminal method is called:
 
 ```go
-_, err := cms.NewSigner().
-    WithCertificate(nil).  // invalid — accumulated
-    WithPrivateKey(nil).   // invalid — accumulated
-    Sign(r)
+_, err := cms.NewSigner(nil, nil)  // nil cert and nil key
 // err contains both failures via errors.Join
+// errors.Is(err, cms.ErrInvalidConfiguration) → true
 ```
 
 **Sentinel errors:**

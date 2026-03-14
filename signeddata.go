@@ -774,8 +774,8 @@ func ParseSignedData(r io.Reader) (*ParsedSignedData, error) {
 		return nil, wrapError(CodeParse, "reading input", err)
 	}
 
-	// Normalize BER to DER.
-	derBytes, err := ber.Normalize(bytes.NewReader(input))
+	// Convert BER to DER.
+	derBytes, err := ber.ToDER(bytes.NewReader(input))
 	if err != nil {
 		return nil, wrapError(CodeBERConversion, "BER to DER normalization failed", err)
 	}

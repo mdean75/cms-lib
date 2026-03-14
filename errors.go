@@ -1,11 +1,3 @@
-/*
-Package cms implements the Cryptographic Message Syntax as defined in RFC 5652.
-
-It provides signing, verification, and parsing of CMS SignedData messages with
-support for RSA (PKCS1v15 and PSS), ECDSA, and Ed25519 signing algorithms.
-Messages produced by this package are interoperable with other CMS implementations
-including OpenSSL and Java Bouncy Castle.
-*/
 package cms
 
 import "errors"

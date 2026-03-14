@@ -3,14 +3,14 @@
 // Go's encoding/asn1 package only accepts Distinguished Encoding Rules (DER),
 // a strict canonical subset of Basic Encoding Rules (BER). Real-world CMS
 // messages — especially those produced by Windows APIs and older implementations
-// — frequently use BER encoding. Normalize converts any valid BER input to
+// — frequently use BER encoding. ToDER converts any valid BER input to
 // its canonical DER equivalent.
 //
 // A key correctness requirement: a zero-length OCTET STRING encoded with
 // indefinite length must be preserved as a present-but-empty field after
 // normalization. This case arises in CMS SignedData when the content is a
 // signed 0-byte payload. Implementations that drop this field incorrectly
-// treat the message as a detached signature. See Normalize for details.
+// treat the message as a detached signature. See ToDER for details.
 package ber
 
 import (
@@ -113,7 +113,7 @@ var (
 	errBooleanLength          = errors.New("ber: BOOLEAN value must be 1 byte")
 )
 
-// Normalize reads BER-encoded ASN.1 data from r and returns the canonical
+// ToDER reads BER-encoded ASN.1 data from r and returns the canonical
 // DER encoding. It handles all BER constructs that DER prohibits, including:
 //
 //   - Indefinite-length encoding (including zero-length content)
@@ -126,7 +126,7 @@ var (
 // zero-length definite-length value. This distinction is critical for CMS
 // SignedData: an absent eContent field means detached signature, while a
 // present zero-length eContent means a signed 0-byte payload.
-func Normalize(r io.Reader) ([]byte, error) {
+func ToDER(r io.Reader) ([]byte, error) {
 	input, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("ber: reading input: %w", err)

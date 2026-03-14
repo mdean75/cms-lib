@@ -202,9 +202,9 @@ func ParseEnvelopedData(r io.Reader) (*ParsedEnvelopedData, error) {
 		return nil, wrapError(CodeParse, "reading EnvelopedData input", err)
 	}
 
-	// Normalize BER to DER so we can handle real-world encodings from
+	// Convert BER to DER so we can handle real-world encodings from
 	// implementations such as Bouncy Castle that use indefinite-length BER.
-	derBytes, err := ber.Normalize(bytes.NewReader(input))
+	derBytes, err := ber.ToDER(bytes.NewReader(input))
 	if err != nil {
 		return nil, wrapError(CodeBERConversion, "BER to DER normalization failed", err)
 	}
@@ -503,7 +503,7 @@ func encryptAESCBC(plaintext []byte, keyLen int) (cek, ciphertext []byte, algID 
 // extractCiphertext returns the raw ciphertext bytes from the EncryptedContent
 // RawValue. In DER the [0] IMPLICIT OCTET STRING is primitive and Bytes is the
 // ciphertext directly. In BER it may be a constructed [0] containing one or more
-// primitive OCTET STRING chunks; after ber.Normalize the indefinite length is
+// primitive OCTET STRING chunks; after ber.ToDER the indefinite length is
 // resolved but the constructed form remains, so we concatenate the inner chunks.
 func extractCiphertext(rv asn1.RawValue) ([]byte, error) {
 	if !rv.IsCompound {

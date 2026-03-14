@@ -29,9 +29,12 @@ go get github.com/mdean75/cms
 
 ### Builders
 
-Use these types to create CMS structures. Each follows the same pattern: construct
-with `NewXxx()`, configure with builder methods, then call the terminal method to
-produce a DER-encoded result.
+Use these types to create CMS structures. `Signer` and `CounterSigner` use a
+functional options constructor: pass the certificate, private key, and any options
+to `NewSigner` or `NewCounterSigner`, which validates and returns an error. The
+remaining four builders use a fluent pattern: a no-arg `NewXxx` constructor,
+chainable `With*` methods, and a terminal method that reports any configuration
+errors.
 
 | Type | Terminal method | Use when you want to… |
 |---|---|---|
@@ -91,19 +94,20 @@ import (
 )
 
 func signMessage(cert *x509.Certificate, key crypto.Signer, content []byte) ([]byte, error) {
-    return cms.NewSigner().
-        WithCertificate(cert).
-        WithPrivateKey(key).
-        Sign(cms.FromBytes(content))
+    s, err := cms.NewSigner(cert, key)
+    if err != nil {
+        return nil, err
+    }
+    return s.Sign(cms.FromBytes(content))
 }
 ```
 
 `Sign` returns a DER-encoded `ContentInfo` wrapping a `SignedData` structure.
 The signed content is embedded (attached) by default.
 
-**Common options:**
+**Common options** (passed as variadic arguments to `NewSigner`):
 
-| Method | Effect |
+| Option | Effect |
 |---|---|
 | `WithHash(crypto.SHA384)` | Use SHA-384 instead of the default SHA-256 |
 | `WithRSAPKCS1()` | Use RSA PKCS#1 v1.5 instead of the default RSA-PSS |
@@ -153,11 +157,10 @@ content. Pass the original content to `VerifyDetached`.
 
 ```go
 // Sign — content is not embedded in the output
-der, err := cms.NewSigner().
-    WithCertificate(cert).
-    WithPrivateKey(key).
-    WithDetachedContent().
-    Sign(cms.FromBytes(content))
+s, err := cms.NewSigner(cert, key, cms.WithDetachedContent())
+if err != nil { ... }
+
+der, err := s.Sign(cms.FromBytes(content))
 
 // Verify — supply the original content separately
 psd, err := cms.ParseSignedData(cms.FromBytes(der))
@@ -172,18 +175,13 @@ Add additional signers with `WithAdditionalSigner`. Each signer is configured
 independently with its own certificate, key, and algorithm options.
 
 ```go
-signer1 := cms.NewSigner().
-    WithCertificate(cert1).
-    WithPrivateKey(key1)
+signer2, err := cms.NewSigner(cert2, key2, cms.WithHash(crypto.SHA384))
+if err != nil { ... }
 
-signer2 := cms.NewSigner().
-    WithCertificate(cert2).
-    WithPrivateKey(key2).
-    WithHash(crypto.SHA384)
+signer1, err := cms.NewSigner(cert1, key1, cms.WithAdditionalSigner(signer2))
+if err != nil { ... }
 
-der, err := signer1.
-    WithAdditionalSigner(signer2).
-    Sign(cms.FromBytes(content))
+der, err := signer1.Sign(cms.FromBytes(content))
 ```
 
 `Verify` and `VerifyDetached` check every `SignerInfo` in the structure. All
@@ -196,10 +194,10 @@ witnessed-at timestamp without a TSA.
 
 ```go
 // counter is applied to every SignerInfo in the parsed ContentInfo
-updated, err := cms.NewCounterSigner().
-    WithCertificate(counterCert).
-    WithPrivateKey(counterKey).
-    CounterSign(cms.FromBytes(der))
+cs, err := cms.NewCounterSigner(counterCert, counterKey)
+if err != nil { ... }
+
+updated, err := cs.CounterSign(cms.FromBytes(der))
 ```
 
 `CounterSign` returns a new DER-encoded `ContentInfo` with the counter-signature

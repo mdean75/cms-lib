@@ -83,7 +83,7 @@ func TestInterop_EdgeCases(t *testing.T) {
 		},
 		{
 			// Outermost ContentInfo SEQUENCE encoded with BER indefinite length.
-			// ParseSignedData calls ber.Normalize internally, so this must succeed.
+			// ParseSignedData calls ber.ToDER internally, so this must succeed.
 			name:    "BER indefinite-length outer SEQUENCE",
 			fixture: "testdata/edge_cases/ber_indefinite_outer.der",
 		},

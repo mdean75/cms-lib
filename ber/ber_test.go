@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNormalize(t *testing.T) {
+func TestToDER(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   []byte
@@ -221,7 +221,7 @@ func TestNormalize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Normalize(bytes.NewReader(tt.input))
+			got, err := ToDER(bytes.NewReader(tt.input))
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -232,10 +232,10 @@ func TestNormalize(t *testing.T) {
 	}
 }
 
-// TestNormalize_ZeroBytePayloadDistinction verifies the critical invariant that
+// TestToDER_ZeroBytePayloadDistinction verifies the critical invariant that
 // a zero-length value with indefinite encoding is never collapsed to absence.
 // This is the primary edge case where known BER implementations fail.
-func TestNormalize_ZeroBytePayloadDistinction(t *testing.T) {
+func TestToDER_ZeroBytePayloadDistinction(t *testing.T) {
 	// BER encoding of eContent = [0] EXPLICIT OCTET STRING (0 bytes), indefinite length.
 	// This is what a Windows CryptoAPI or certain JVM implementations produce for a
 	// CMS SignedData over a 0-byte payload.
@@ -246,7 +246,7 @@ func TestNormalize_ZeroBytePayloadDistinction(t *testing.T) {
 		0x00, 0x00, // end-of-contents [0]
 	}
 
-	got, err := Normalize(bytes.NewReader(berInput))
+	got, err := ToDER(bytes.NewReader(berInput))
 	require.NoError(t, err)
 
 	// The normalized output must contain a present [0] with a zero-length OCTET STRING.
@@ -310,7 +310,7 @@ func TestWriteTLV(t *testing.T) {
 
 var benchResult []byte
 
-func BenchmarkNormalize(b *testing.B) {
+func BenchmarkToDER(b *testing.B) {
 	// Construct a moderately complex BER input: a SEQUENCE with indefinite length
 	// containing several INTEGER elements.
 	input := buildBenchmarkInput()
@@ -318,7 +318,7 @@ func BenchmarkNormalize(b *testing.B) {
 	var r []byte
 	for b.Loop() {
 		var err error
-		r, err = Normalize(bytes.NewReader(input))
+		r, err = ToDER(bytes.NewReader(input))
 		if err != nil {
 			b.Fatal(err)
 		}

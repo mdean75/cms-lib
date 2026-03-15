@@ -184,12 +184,9 @@ linters:
 
     # --- Interface checks ---
 
-    iface:
-      linter-mode: all
+    iface: {}
 
-    interfacebloat:
-      # Interfaces with more than 10 methods are a design smell.
-      count: 10
+    interfacebloat: {} # default: 10 methods
 
     # --- Naked returns ---
 
@@ -206,9 +203,7 @@ linters:
 
     # --- Receiver consistency ---
 
-    recvcheck:
-      # Enforce that all methods on a type use the same receiver type (pointer or value).
-      skip-underscore: false
+    recvcheck: {}
 
     # --- Struct tag alignment ---
 
@@ -257,8 +252,8 @@ linters:
     # --- Predeclared identifiers ---
 
     predeclared:
-      # Comma-separated list of predeclared identifiers to allow shadowing (none for now).
-      ignore: ""
+      # List of predeclared identifiers to allow shadowing (none for now).
+      ignore: []
 
     # --- staticcheck ---
 

@@ -38,19 +38,18 @@ func main() {
 	_, extraCert := generateRSACert(big.NewInt(2))
 
 	// Baseline: PKCS1v15 SHA-256 attached SignedData (most fixtures derive from this).
-	pkcs1Signer := must2(cms.NewSigner(cert, key, cms.WithRSAPKCS1()))
+	pkcs1Signer := mustOK(cms.NewSigner(cert, key, cms.WithRSAPKCS1()))
 	baseline := mustSign(pkcs1Signer, content)
-	baseSD := parseSD(baseline)
+	baseSD := parseSignedDataDER(baseline)
 
 	// Baseline PSS signed DER.  Our library encodes all four RSASSA-PSS-params
 	// fields including trailerField=1, so pssBaseline serves for both PSS fixtures
 	// that only differ in the presence/absence of individual param fields.
-	pssSigner := must2(cms.NewSigner(cert, key))
+	pssSigner := mustOK(cms.NewSigner(cert, key))
 	pssBaseline := mustSign(pssSigner, content)
 
-	genSHA256NullParams(baseSD, content)
+	genSHA256NullParams(baseSD)
 	write(outDir+"/rsa_pss_trailer_explicit.der", pssBaseline)
-	write(outDir+"/rsa_pss_all_defaults_present.der", pssBaseline)
 	genRSAPSSSaltLen20(key, cert, content)
 	genEmptyCertificatesSet(baseSD)
 	genExtraCertInBag(cert, key, extraCert, content)
@@ -71,7 +70,7 @@ func main() {
 // digestAlgorithm AlgorithmIdentifier carries an explicit NULL parameters
 // field. RFC 5754 §2 says parameters SHOULD be absent, but a receiver MUST
 // accept NULL when present. Bouncy Castle and some PKCS#11 tokens use this.
-func genSHA256NullParams(sd pkiasn1.SignedData, _ []byte) {
+func genSHA256NullParams(sd pkiasn1.SignedData) {
 	nullParam := asn1.RawValue{Tag: asn1.TagNull, Class: asn1.ClassUniversal}
 
 	for i := range sd.DigestAlgorithms {
@@ -81,7 +80,7 @@ func genSHA256NullParams(sd pkiasn1.SignedData, _ []byte) {
 		sd.SignerInfos[i].DigestAlgorithm.Parameters = nullParam
 	}
 
-	write(outDir+"/sha256_null_params.der", wrapSD(sd))
+	write(outDir+"/sha256_null_params.der", signedDataToContentInfo(sd))
 }
 
 // genRSAPSSSaltLen20 creates an RSA-PSS SHA-256 signature with saltLength=20.
@@ -173,7 +172,7 @@ func genRSAPSSSaltLen20(key *rsa.PrivateKey, cert *x509.Certificate, content []b
 		SignerInfos:  []pkiasn1.SignerInfo{si},
 	}
 
-	write(outDir+"/rsa_pss_saltlen_20.der", wrapSD(sd))
+	write(outDir+"/rsa_pss_saltlen_20.der", signedDataToContentInfo(sd))
 }
 
 // genEmptyCertificatesSet produces a SignedData where the certificates [0]
@@ -215,7 +214,7 @@ func genEmptyCertificatesSet(sd pkiasn1.SignedData) {
 // genExtraCertInBag signs content and includes an extra unrelated certificate
 // in the certificates bag. The verifier should succeed and ignore the extra cert.
 func genExtraCertInBag(cert *x509.Certificate, key *rsa.PrivateKey, extra *x509.Certificate, content []byte) {
-	s := must2(cms.NewSigner(cert, key, cms.WithRSAPKCS1(), cms.AddCertificate(extra)))
+	s := mustOK(cms.NewSigner(cert, key, cms.WithRSAPKCS1(), cms.AddCertificate(extra)))
 	write(outDir+"/extra_cert_in_bag.der", mustSign(s, content))
 }
 
@@ -283,15 +282,15 @@ func genBERConstructedOctet(sd pkiasn1.SignedData, content []byte) {
 	})
 	sd.EncapContentInfo.EContent = asn1.RawValue{FullBytes: outerWrapper}
 
-	write(outDir+"/ber_constructed_octet.der", wrapSD(sd))
+	write(outDir+"/ber_constructed_octet.der", signedDataToContentInfo(sd))
 }
 
 // genMultiSignerDedup uses our library's WithAdditionalSigner option to create
 // a SignedData with two SignerInfos that both use SHA-256. The digestAlgorithms
 // SET must contain SHA-256 exactly once (RFC 5652 deduplication).
 func genMultiSignerDedup(cert *x509.Certificate, key *rsa.PrivateKey, content []byte) {
-	s2 := must2(cms.NewSigner(cert, key, cms.WithRSAPKCS1()))
-	s := must2(cms.NewSigner(cert, key, cms.WithRSAPKCS1(),
+	s2 := mustOK(cms.NewSigner(cert, key, cms.WithRSAPKCS1()))
+	s := mustOK(cms.NewSigner(cert, key, cms.WithRSAPKCS1(),
 		cms.WithAdditionalSigner(s2)))
 	write(outDir+"/multi_signer_dedup.der", mustSign(s, content))
 }
@@ -307,8 +306,8 @@ func genLargeSerialNumber(key *rsa.PrivateKey, content []byte) {
 	serialBytes[19] = 0x42
 	serial := new(big.Int).SetBytes(serialBytes)
 
-	_, largeCert := generateRSACertWithSerial(key, serial)
-	s := must2(cms.NewSigner(largeCert, key, cms.WithRSAPKCS1()))
+	largeCert := selfSignedCert(key, serial)
+	s := mustOK(cms.NewSigner(largeCert, key, cms.WithRSAPKCS1()))
 	write(outDir+"/large_serial_number.der", mustSign(s, content))
 }
 
@@ -316,8 +315,9 @@ func genLargeSerialNumber(key *rsa.PrivateKey, content []byte) {
 // Helper functions
 // ---------------------------------------------------------------------------
 
-// wrapSD marshals a SignedData into a ContentInfo DER encoding.
-func wrapSD(sd pkiasn1.SignedData) []byte {
+// signedDataToContentInfo marshals sd into a DER-encoded ContentInfo SEQUENCE
+// wrapping a SignedData, which is the outermost structure expected by parsers.
+func signedDataToContentInfo(sd pkiasn1.SignedData) []byte {
 	sdBytes, err := asn1.Marshal(sd)
 	must(err)
 	explicit0, err := asn1.Marshal(asn1.RawValue{
@@ -336,8 +336,9 @@ func wrapSD(sd pkiasn1.SignedData) []byte {
 	return ciDER
 }
 
-// parseSD parses a DER ContentInfo+SignedData and returns the SignedData struct.
-func parseSD(der []byte) pkiasn1.SignedData {
+// parseSignedDataDER decodes a DER ContentInfo and returns the embedded
+// SignedData struct, fataling if either layer fails to unmarshal.
+func parseSignedDataDER(der []byte) pkiasn1.SignedData {
 	var ci pkiasn1.ContentInfo
 	_, err := asn1.Unmarshal(der, &ci)
 	must(err)
@@ -399,12 +400,6 @@ func generateRSACert(serial *big.Int) (*rsa.PrivateKey, *x509.Certificate) {
 	return key, selfSignedCert(key, serial)
 }
 
-// generateRSACertWithSerial creates a self-signed certificate for an existing
-// key using the provided serial number.
-func generateRSACertWithSerial(key *rsa.PrivateKey, serial *big.Int) (*rsa.PrivateKey, *x509.Certificate) {
-	return key, selfSignedCert(key, serial)
-}
-
 // selfSignedCert issues a self-signed X.509 certificate for key.
 func selfSignedCert(key *rsa.PrivateKey, serial *big.Int) *x509.Certificate {
 	tmpl := &x509.Certificate{
@@ -421,8 +416,8 @@ func selfSignedCert(key *rsa.PrivateKey, serial *big.Int) *x509.Certificate {
 	return cert
 }
 
-// mustSigner is an alias for must2 for Signer construction.
-func must2[T any](v T, err error) T {
+// mustOK returns v, fataling if err is non-nil. Use for (T, error) return values.
+func mustOK[T any](v T, err error) T {
 	must(err)
 	return v
 }
@@ -434,17 +429,22 @@ func mustSign(s *cms.Signer, content []byte) []byte {
 	return der
 }
 
+// readFile reads all bytes from path, fataling if the file cannot be read.
 func readFile(path string) []byte {
 	b, err := os.ReadFile(path)
 	must(err)
 	return b
 }
 
+// write writes data to path with mode 0644 and logs the file name and size,
+// fataling if the write fails.
 func write(path string, data []byte) {
 	must(os.WriteFile(path, data, 0o644))
 	log.Printf("  wrote %s (%d bytes)", path, len(data))
 }
 
+// writePEM encodes der as a PEM block of the given type and writes it to path,
+// fataling if the file cannot be created or the PEM encoding fails.
 func writePEM(path, typ string, der []byte) {
 	f, err := os.Create(path)
 	must(err)
@@ -453,6 +453,8 @@ func writePEM(path, typ string, der []byte) {
 	log.Printf("  wrote %s", path)
 }
 
+// must fatals with the error message if err is non-nil. Use for operations
+// where failure indicates a programming error or corrupt test fixture.
 func must(err error) {
 	if err != nil {
 		log.Fatal(err)

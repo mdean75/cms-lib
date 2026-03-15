@@ -38,15 +38,10 @@ func TestInterop_EdgeCases(t *testing.T) {
 		},
 		{
 			// RFC 4055 §3.3: RSASSA-PSS-params trailerField [3] INTEGER 1 is the default
-			// and may be explicit. Bouncy Castle always encodes it.
+			// but is commonly encoded explicitly by Bouncy Castle and OpenSSL. The parser
+			// must accept it. All four optional RSASSA-PSS-params fields are present.
 			name:    "RSA-PSS with trailerField explicit",
 			fixture: "testdata/edge_cases/rsa_pss_trailer_explicit.der",
-		},
-		{
-			// All four RSASSA-PSS-params fields present with explicit values. Parser
-			// must not treat the presence of all fields as an error.
-			name:    "RSA-PSS with all optional fields present",
-			fixture: "testdata/edge_cases/rsa_pss_all_defaults_present.der",
 		},
 		{
 			// saltLength=20 (the SHA-1 default) used with SHA-256. Legal per RFC 4055.
@@ -88,8 +83,9 @@ func TestInterop_EdgeCases(t *testing.T) {
 			fixture: "testdata/edge_cases/ber_indefinite_outer.der",
 		},
 		{
-			// Several outer TLVs use non-minimal long-form length encoding. The BER
-			// normalizer must rewrite lengths to their minimal form.
+			// The outermost ContentInfo SEQUENCE uses a non-minimal (padded) long-form
+			// length encoding. DER requires the shortest form; BER allows leading zero
+			// bytes in the multi-byte length. The BER normalizer must rewrite it.
 			name:    "BER non-minimal (long-form) length encoding",
 			fixture: "testdata/edge_cases/ber_long_form_lengths.der",
 		},

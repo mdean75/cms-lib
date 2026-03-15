@@ -33,8 +33,12 @@ type RSAPSSParams struct {
 	// This library uses a salt length equal to the hash output length.
 	SaltLength int `asn1:"explicit,optional,tag:2"`
 
-	// TrailerField identifies the trailer field. The only supported value is 1
-	// (trailerFieldBC), which is also the default.
+	// TrailerField identifies the trailer field. The only valid value per RFC 4055
+	// §3.3 is 1 (trailerFieldBC), which is also the ASN.1 DEFAULT. DER encoding
+	// rules require DEFAULT values to be absent, but OpenSSL's PSS parser does not
+	// apply the ASN.1 default when the field is absent — it reads 0 and then fails
+	// its own trailerField==1 check. We therefore encode trailerField=1 explicitly
+	// to maintain OpenSSL interop, accepting the technical DER deviation.
 	TrailerField int `asn1:"explicit,optional,tag:3"`
 }
 

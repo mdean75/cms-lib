@@ -1,16 +1,16 @@
 #!/usr/bin/env groovy
 // CMSGenerator.groovy — regenerate BC-compatible CMS test fixtures using actual
-// Bouncy Castle. Intended to be run via testdata/bc/regen-docker.sh, which
+// Bouncy Castle. Intended to be run via testdata/bc/regen.sh, which
 // downloads the BC JARs and passes them on the classpath automatically:
 //
-//   testdata/bc/regen-docker.sh
+//   testdata/bc/regen.sh
 //
 // To run locally without Docker, download bcprov-jdk18on, bcpkix-jdk18on, and
 // bcutil-jdk18on from Maven Central and run:
 //   groovy -cp "bcprov-jdk18on-1.80.jar:bcpkix-jdk18on-1.80.jar:bcutil-jdk18on-1.80.jar" \
 //     testdata/bc/CMSGenerator.groovy
 //
-// BC version is controlled by BC_VERSION in regen-docker.sh.
+// BC version is controlled by BC_VERSION in regen.sh.
 
 import java.math.BigInteger
 import java.security.KeyPair

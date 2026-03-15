@@ -11,32 +11,21 @@ generation logic.
 
 ### Bouncy Castle fixtures
 
-Two options are available. Both write to `testdata/bc/signed/` and
-`testdata/bc/enveloped/`.
-
-**Go simulator** (no external dependencies — models BC's ASN.1 encoding choices):
+Writes to `testdata/bc/signed/` and `testdata/bc/enveloped/`. Requires Docker.
 
 ```bash
 testdata/bc/regen.sh
 ```
 
-**Actual Bouncy Castle** via Docker (produces genuine BC output; authoritative source
-of truth for BC encoding behaviour):
-
-```bash
-testdata/bc/regen-docker.sh
-```
-
-On first run, `regen-docker.sh` downloads `bcpkix-jdk18on` and `bcprov-jdk18on`
-from Maven Central (~10 MB) and caches them under
+On first run, the script downloads `bcpkix-jdk18on`, `bcprov-jdk18on`, and
+`bcutil-jdk18on` from Maven Central (~10 MB) and caches them under
 `${XDG_CACHE_HOME:-~/.cache}/cms-lib/bc-jars`. Subsequent runs use the cache and
 are fully offline. The BC version is controlled by `BC_VERSION` at the top of
-`regen-docker.sh`.
+`regen.sh`.
 
-The Go simulator (`gen.go`) post-processes the library's own output to replicate BC's
-encoding quirks (explicit `NULL` digest parameters, `sha256WithRSAEncryption` OID for
-PKCS#1 v1.5, `trailerField=1` in RSA-PSS params). `CMSGenerator.groovy` produces
-these naturally because Bouncy Castle itself generates them.
+`CMSGenerator.groovy` runs inside a `groovy:4-jdk21` Docker container using actual
+Bouncy Castle to produce the fixtures. The committed fixtures in `testdata/bc/` are
+genuine BC output.
 
 ### OpenSSL fixtures
 

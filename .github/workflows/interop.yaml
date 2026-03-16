@@ -1,0 +1,28 @@
+name: Interop
+on: [push, pull_request]
+jobs:
+  interop:
+    name: Interop Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: cmd/go.sum
+
+      - name: Install Groovy
+        run: sudo apt-get install -y groovy
+
+      - name: Cache Bouncy Castle JARs (Grape)
+        uses: actions/cache@v4
+        with:
+          path: ~/.groovy/grapes
+          key: ${{ runner.os }}-grape-${{ hashFiles('cmd/interop/verify_bc.groovy') }}
+          restore-keys: |
+            ${{ runner.os }}-grape-
+
+      - name: Run interop tests
+        working-directory: cmd/interop
+        run: ./run_all_tests.sh

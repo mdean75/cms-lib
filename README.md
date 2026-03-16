@@ -2,6 +2,7 @@
 
 [![codecov](https://codecov.io/gh/mdean75/cms-lib/branch/main/graph/badge.svg)](https://codecov.io/gh/mdean75/cms-lib)
 [![golangci-lint](https://github.com/mdean75/cms-lib/actions/workflows/lint.yaml/badge.svg)](https://github.com/mdean75/cms-lib/actions/workflows/lint.yaml)
+[![Interop](https://github.com/mdean75/cms-lib/actions/workflows/interop.yaml/badge.svg)](https://github.com/mdean75/cms-lib/actions/workflows/interop.yaml)
 [![Go Report Card](https://goreportcard.com/badge/github.com/mdean75/cms-lib)](https://goreportcard.com/report/github.com/mdean75/cms-lib)
 
 A Go implementation of [RFC 5652 Cryptographic Message Syntax (CMS)](https://www.rfc-editor.org/rfc/rfc5652).

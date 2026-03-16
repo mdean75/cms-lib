@@ -1,4 +1,4 @@
-name: Interop
+name: Interop Tests
 on: [push, pull_request]
 jobs:
   interop:
